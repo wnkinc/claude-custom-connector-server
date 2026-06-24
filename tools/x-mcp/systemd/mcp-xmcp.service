@@ -1,0 +1,42 @@
+[Unit]
+# Public, Google-OAuth-gated x-mcp instance for the Claude apps (desktop/web/mobile),
+# served over the Cloudflare Tunnel at https://xmcp.secure-agentic-engineering.com.
+# This is SEPARATE from the loopback :8051 instance in secure-agentic-engineering
+# that serves DeerFlow (no auth) -- do not collide names or ports with it.
+# Install: ln -s this file to ~/.config/systemd/user/mcp-xmcp.service
+Description=MCP tool: x-mcp (public, Google-OAuth gated via Cloudflare Tunnel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/wes/Documents/mcp-tools/tools/x-mcp
+# MCP_PORT is read by main() BEFORE .env loads, so it MUST live here, not in .env.
+Environment=MCP_HOST=127.0.0.1
+Environment=MCP_PORT=8061
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# OAuth client registrations + encrypted tokens need a writable home. StateDirectory
+# creates ~/.local/state/mcp-xmcp and keeps it writable even under ProtectHome=read-only.
+StateDirectory=mcp-xmcp
+Environment=FASTMCP_HOME=%S/mcp-xmcp
+ExecStart=/home/wes/Documents/mcp-tools/tools/x-mcp/.venv/bin/python server.py
+Restart=on-failure
+RestartSec=5
+
+# --- Hardening (the namespace/seccomp subset that works in a --user unit) ---
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=default.target
