@@ -1,6 +1,9 @@
 import copy
+import hashlib
+import hmac
 import html
 import http.server
+import json
 import logging
 import os
 import secrets
@@ -393,6 +396,7 @@ async def require_approval(action: str, approval_token: str | None) -> tuple[boo
         token = secrets.token_urlsafe(24)
         _PENDING_APPROVALS[token] = {"action": action, "status": "pending", "created": time.time()}
         link = f"{base}/approve/{token}"
+        await _slack_post_approval(token, action)  # out-of-band push (best-effort)
         return False, (
             "APPROVAL REQUIRED — the action was NOT performed.\n\n"
             "INSTRUCTIONS FOR THE ASSISTANT: Show the user the full approval URL below "
@@ -452,6 +456,66 @@ def _approval_buttons_page(action: str) -> str:
         '<button class="no" name="decision" value="deny">❌ Deny</button>'
         "</form>",
     )
+
+
+# ---------------------------------------------------------------------------
+# Slack as the out-of-band channel: push an interactive Approve/Deny message so the
+# human can decide from their phone/desktop without opening the chat or a web page.
+# All optional -- if SLACK_BOT_TOKEN / SLACK_APPROVAL_CHANNEL aren't set, posting is
+# skipped and the in-chat approval link still works.
+# ---------------------------------------------------------------------------
+def _slack_enabled() -> bool:
+    return bool(os.getenv("SLACK_BOT_TOKEN") and os.getenv("SLACK_APPROVAL_CHANNEL"))
+
+
+async def _slack_post_approval(token: str, action: str) -> None:
+    """Post an interactive Approve/Deny message to Slack. Best-effort (never raises)."""
+    if not _slack_enabled():
+        return
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"⏸ *Approval requested*\n>{action}"}},
+        {
+            "type": "actions",
+            "block_id": f"approval:{token}",
+            "elements": [
+                {"type": "button", "style": "primary", "action_id": "approve",
+                 "text": {"type": "plain_text", "text": "✅ Approve"}, "value": token},
+                {"type": "button", "style": "danger", "action_id": "deny",
+                 "text": {"type": "plain_text", "text": "❌ Deny"}, "value": token},
+            ],
+        },
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                "https://slack.com/api/chat.postMessage",
+                headers={"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"},
+                json={
+                    "channel": os.environ["SLACK_APPROVAL_CHANNEL"],
+                    "text": f"Approval requested: {action}",  # notification fallback text
+                    "blocks": blocks,
+                },
+            )
+        data = resp.json()
+        if not data.get("ok"):
+            LOGGER.error("Slack chat.postMessage failed: %s", data.get("error"))
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("Slack approval post failed")
+
+
+def _verify_slack_signature(timestamp: str, body: bytes, signature: str) -> bool:
+    """Verify Slack's request signature (HMAC-SHA256 over v0:timestamp:body)."""
+    secret = os.getenv("SLACK_SIGNING_SECRET", "")
+    if not (secret and timestamp and signature):
+        return False
+    try:
+        if abs(time.time() - int(timestamp)) > 300:  # reject stale/replayed requests
+            return False
+    except ValueError:
+        return False
+    basestring = b"v0:" + timestamp.encode() + b":" + body
+    expected = "v0=" + hmac.new(secret.encode(), basestring, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
 
 async def gated_demo_action(message: str, approval_token: str | None = None) -> str:
@@ -708,6 +772,51 @@ def create_mcp() -> FastMCP:
             return HTMLResponse(_approval_shell(
                 "Already decided", f"<h2>Already {html.escape(rec['status'])}</h2>"))
         return HTMLResponse(_approval_buttons_page(rec["action"]))
+
+    @mcp.custom_route("/slack/interact", methods=["POST"], include_in_schema=False)
+    async def slack_interact(request):  # type: ignore[no-untyped-def]
+        from starlette.responses import PlainTextResponse, Response
+
+        raw = await request.body()
+        if not _verify_slack_signature(
+            request.headers.get("X-Slack-Request-Timestamp", ""),
+            raw,
+            request.headers.get("X-Slack-Signature", ""),
+        ):
+            return PlainTextResponse("bad signature", status_code=403)
+
+        import urllib.parse as _up
+
+        form = _up.parse_qs(raw.decode())
+        payload = json.loads((form.get("payload") or ["{}"])[0])
+        actions = payload.get("actions") or []
+        response_url = payload.get("response_url")
+        if not actions:
+            return Response(status_code=200)
+        action_id = actions[0].get("action_id")
+        token = actions[0].get("value")
+
+        _prune_approvals()
+        rec = _PENDING_APPROVALS.get(token)
+        if rec is None:
+            msg = "⚠️ This approval link has expired."
+        elif action_id == "approve":
+            rec["status"] = "approved"
+            msg = f"✅ *Approved*\n>{rec['action']}\n\nReturn to Claude and tell it to continue."
+        elif action_id == "deny":
+            rec["status"] = "denied"
+            msg = f"❌ *Denied*\n>{rec['action']}"
+        else:
+            msg = "Unknown action."
+
+        # Replace the original message in place (removes the buttons).
+        if response_url:
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    await client.post(response_url, json={"replace_original": True, "text": msg})
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("Slack response_url update failed")
+        return Response(status_code=200)
 
     # PATCHED (mcp-tools): attach MCP-native OAuth for public serving. When auth is
     # disabled (MCP_AUTH_ENABLED off) build_oauth_provider() returns None and the
