@@ -1,4 +1,10 @@
-fastmcp
+# Pinned: unpinned `fastmcp` silently drifted to 3.x, which broke the connector
+# (see below). Reverting to 2.x isn't viable -- this codebase uses 3.x APIs
+# (add_tool(fn), from_openapi mcp_component_fn, shared OAuth provider). Staying on
+# 3.4.2 and stripping the per-tool outputSchema in create_mcp() instead, which is
+# what made Claude drop the per-tool approval toggles (anthropics/claude-code#25081).
+fastmcp==3.4.2
+mcp==1.28.0
 httpx
 python-dotenv
 requests-oauthlib

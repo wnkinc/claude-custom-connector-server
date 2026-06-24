@@ -1,7 +1,9 @@
 import copy
+import html
 import http.server
 import logging
 import os
+import secrets
 import socketserver
 import threading
 import time
@@ -352,6 +354,126 @@ XAI_RESPONSES_URL = "https://api.x.ai/v1/responses"
 DEFAULT_XAI_MODEL = "grok-4-1-fast"
 
 
+# ---------------------------------------------------------------------------
+# Out-of-band human-in-the-loop approval.
+#
+# claude.ai gives us no reliable in-chat gate: tool-approval is sticky (approve once
+# and it's approved across every chat; the connector "needs approval" setting stops
+# applying), and MCP elicitation dialogs don't render for custom connectors (tested).
+# So a gated tool returns a clickable approval link to the chat and performs the
+# action ONLY after the human opens the (capability-token) page and clicks Approve.
+# The model can't click the link or forge the server-side "approved" state, so this
+# is a real gate -- unlike a confirm-token the model can read and replay.
+#
+# Single uvicorn process => a plain in-memory dict is fine for pending approvals.
+# ---------------------------------------------------------------------------
+_PENDING_APPROVALS: dict[str, dict] = {}
+_APPROVAL_TTL_SECONDS = 600  # approval links expire after 10 minutes
+
+
+def _prune_approvals() -> None:
+    now = time.time()
+    stale = [t for t, r in _PENDING_APPROVALS.items() if now - r["created"] > _APPROVAL_TTL_SECONDS]
+    for t in stale:
+        _PENDING_APPROVALS.pop(t, None)
+
+
+async def require_approval(action: str, approval_token: str | None) -> tuple[bool, str]:
+    """Out-of-band approval gate. Returns (approved, message_for_user).
+
+    When `approved` is False the caller MUST NOT perform the action and should return
+    `message_for_user` to the user verbatim. First call (no token) registers a pending
+    request and returns an approval link; later calls (with the token) report the
+    human's decision. The human clicking Approve on the page is the only thing that
+    flips the stored state to "approved".
+    """
+    _prune_approvals()
+    base = os.getenv("MCP_PUBLIC_URL", "").rstrip("/")
+    if not approval_token:
+        token = secrets.token_urlsafe(24)
+        _PENDING_APPROVALS[token] = {"action": action, "status": "pending", "created": time.time()}
+        link = f"{base}/approve/{token}"
+        return False, (
+            "APPROVAL REQUIRED — the action was NOT performed.\n\n"
+            "INSTRUCTIONS FOR THE ASSISTANT: Show the user the full approval URL below "
+            "exactly as written, on its own line, so it renders as a clickable link. Do "
+            "NOT paraphrase it, shorten it, or say 'the link above' — the user cannot see "
+            "your tool output, only what you write. Then stop and wait for the user.\n\n"
+            f"Action awaiting approval: {action}\n\n"
+            f"Approval URL: {link}\n\n"
+            f"After the user says they approved, call this tool again with "
+            f'approval_token="{token}" to proceed. Until they approve, that call will '
+            "report still-pending."
+        )
+    rec = _PENDING_APPROVALS.get(approval_token)
+    if rec is None:
+        return False, (
+            f"⚠️ Approval token `{approval_token}` is unknown or expired — "
+            f"ask me to request approval again."
+        )
+    status = rec["status"]
+    if status == "approved":
+        return True, "approved"
+    if status == "denied":
+        _PENDING_APPROVALS.pop(approval_token, None)
+        return False, "❌ You denied this action, so I did not run it."
+    return False, (
+        f"⏳ Still waiting for your approval — open the link, click **Approve**, then "
+        f"ask me to continue (approval token `{approval_token}`)."
+    )
+
+
+def _approval_shell(title: str, body_html: str) -> str:
+    return (
+        '<!doctype html><html><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>{html.escape(title)}</title><style>"
+        "body{font-family:system-ui,-apple-system,sans-serif;max-width:34rem;"
+        "margin:3rem auto;padding:0 1rem;background:#0b0b0c;color:#e8e8ea}"
+        ".card{background:#161618;border:1px solid #2a2a2e;border-radius:14px;padding:1.5rem}"
+        ".act{background:#0f1830;border:1px solid #24407a;border-radius:8px;padding:.75rem 1rem;"
+        "margin:1rem 0;font-family:ui-monospace,monospace;word-break:break-word}"
+        "button{font-size:1rem;padding:.7rem 1.4rem;border:0;border-radius:10px;cursor:pointer;margin:.25rem .5rem .25rem 0}"
+        ".ok{background:#2563eb;color:#fff}.no{background:#3a1d1d;color:#f3b4b4}"
+        "</style></head><body><div class=\"card\">"
+        f"{body_html}</div></body></html>"
+    )
+
+
+def _approval_buttons_page(action: str) -> str:
+    # Buttons POST the decision; a plain GET of the link has no side effect, so a
+    # browser/chat link-prefetch can't silently approve.
+    return _approval_shell(
+        "Approve action",
+        f"<h2>⏸ Approval requested</h2><p>An MCP tool wants to run:</p>"
+        f'<div class="act">{html.escape(action)}</div>'
+        '<form method="post">'
+        '<button class="ok" name="decision" value="approve">✅ Approve</button>'
+        '<button class="no" name="decision" value="deny">❌ Deny</button>'
+        "</form>",
+    )
+
+
+async def gated_demo_action(message: str, approval_token: str | None = None) -> str:
+    """DEMO of the out-of-band human approval gate (no real side effect).
+
+    A stand-in for a future write/destructive tool. On the first call it returns an
+    approval link and does NOT act; after you open the link, click Approve, and ask
+    me to continue, re-invoke with the token and it "runs". Proves the loop end to end.
+
+    Args:
+        message: Any text describing the pretend action.
+        approval_token: Leave empty on the first call. When re-invoking after you've
+            approved, pass the token shown in the approval prompt.
+    """
+    approved, note = await require_approval(f"gated_demo_action — {message!r}", approval_token)
+    if not approved:
+        return note
+    if approval_token:
+        _PENDING_APPROVALS.pop(approval_token, None)  # one-time use
+    return f"✅ Approved by you — performed the demo action: {message!r}"
+
+
 async def grok_x_search(query: str) -> str:
     """Search X (Twitter) via xAI Grok's x_search and return a cited summary.
 
@@ -522,13 +644,70 @@ def create_mcp() -> FastMCP:
             "response": [log_response],
         },
     )
+    # FastMCP 3.x derives an `outputSchema` for every OpenAPI tool. Claude's
+    # connector mishandles tools that advertise outputSchema -- it drops the
+    # per-tool approval toggle (and sometimes the tool) from connector settings
+    # (anthropics/claude-code#25081). The pre-3.x FastMCP we used to run didn't
+    # emit these, which is why toggles worked before the dependency moved to 3.x.
+    # Strip output_schema at build time so the wire shape matches the old, working
+    # one. Escape hatch: XMCP_KEEP_OUTPUT_SCHEMA=1.
+    keep_output_schema = is_truthy(os.getenv("XMCP_KEEP_OUTPUT_SCHEMA", "0"))
+
+    def _strip_output_schema(_route, component) -> None:
+        if not keep_output_schema and getattr(component, "output_schema", None) is not None:
+            component.output_schema = None
+
     mcp = FastMCP.from_openapi(
         openapi_spec=filtered_spec,
         client=client,
         name="X API MCP",
+        mcp_component_fn=None if keep_output_schema else _strip_output_schema,
     )
     # PATCHED: register the Grok x_search tool alongside the raw X-API tools.
-    mcp.add_tool(grok_x_search)
+    grok_tool = mcp.add_tool(grok_x_search)
+    # grok_x_search returns a plain str here, which FastMCP 3.x also wraps in an
+    # outputSchema -- strip it too so no tool advertises one (see above).
+    if not keep_output_schema and getattr(grok_tool, "output_schema", None) is not None:
+        grok_tool.output_schema = None
+
+    # Out-of-band human-in-the-loop demo tool + its approval page. See require_approval.
+    demo_tool = mcp.add_tool(gated_demo_action)
+    if not keep_output_schema and getattr(demo_tool, "output_schema", None) is not None:
+        demo_tool.output_schema = None
+
+    @mcp.custom_route("/approve/{token}", methods=["GET", "POST"], include_in_schema=False)
+    async def approve_route(request):  # type: ignore[no-untyped-def]
+        from starlette.responses import HTMLResponse
+
+        token = request.path_params["token"]
+        _prune_approvals()
+        rec = _PENDING_APPROVALS.get(token)
+        if rec is None:
+            return HTMLResponse(
+                _approval_shell("Not found", "<h2>Link invalid or expired</h2>"
+                                "<p>This approval link is no longer valid.</p>"),
+                status_code=404,
+            )
+        if request.method == "POST":
+            form = await request.form()
+            decision = form.get("decision")
+            if decision == "approve":
+                rec["status"] = "approved"
+                return HTMLResponse(_approval_shell(
+                    "Approved", "<h2>✅ Approved</h2>"
+                    f'<div class="act">{html.escape(rec["action"])}</div>'
+                    "<p>Head back to Claude and tell it to continue.</p>"))
+            if decision == "deny":
+                rec["status"] = "denied"
+                return HTMLResponse(_approval_shell(
+                    "Denied", "<h2>❌ Denied</h2>"
+                    f'<div class="act">{html.escape(rec["action"])}</div>'))
+            return HTMLResponse(_approval_shell("Error", "<p>Unknown decision.</p>"), status_code=400)
+        # GET: show buttons only (no side effect) so a link prefetch can't auto-approve.
+        if rec["status"] != "pending":
+            return HTMLResponse(_approval_shell(
+                "Already decided", f"<h2>Already {html.escape(rec['status'])}</h2>"))
+        return HTMLResponse(_approval_buttons_page(rec["action"]))
 
     # PATCHED (mcp-tools): attach MCP-native OAuth for public serving. When auth is
     # disabled (MCP_AUTH_ENABLED off) build_oauth_provider() returns None and the
