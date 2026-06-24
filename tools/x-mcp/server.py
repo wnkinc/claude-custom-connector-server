@@ -19,6 +19,8 @@ import sys
 import httpx
 import requests
 from fastmcp import FastMCP
+from fastmcp.server.middleware import Middleware
+from fastmcp.tools.tool import ToolResult
 from oauthlib.oauth1 import Client as OAuth1Client
 from requests_oauthlib import OAuth1Session
 
@@ -381,49 +383,77 @@ def _prune_approvals() -> None:
         _PENDING_APPROVALS.pop(t, None)
 
 
-async def require_approval(action: str, approval_token: str | None) -> tuple[bool, str]:
-    """Out-of-band approval gate. Returns (approved, message_for_user).
+def _describe_call(tool_name: str, args: dict) -> str:
+    """Short human-readable description of a tool call, for the approval prompt."""
+    if not args:
+        return f"{tool_name}()"
+    shown = ", ".join(f"{k}={v!r}" for k, v in list(args.items())[:4])
+    if len(args) > 4:
+        shown += ", …"
+    return f"{tool_name}({shown})"
 
-    When `approved` is False the caller MUST NOT perform the action and should return
-    `message_for_user` to the user verbatim. First call (no token) registers a pending
-    request and returns an approval link; later calls (with the token) report the
-    human's decision. The human clicking Approve on the page is the only thing that
-    flips the stored state to "approved".
-    """
+
+def _call_key(tool_name: str, args: dict) -> str:
+    """Stable key for a (tool, args) call so an approval can be matched on re-invoke."""
+    blob = tool_name + "\x00" + json.dumps(args, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+
+def _find_by_call_key(call_key: str) -> tuple[str | None, dict | None]:
     _prune_approvals()
+    for token, rec in _PENDING_APPROVALS.items():
+        if rec.get("call_key") == call_key:
+            return token, rec
+    return None, None
+
+
+async def require_approval_for_call(tool_name: str, args: dict) -> tuple[bool, str | None]:
+    """Out-of-band approval gate for an arbitrary tool call. Returns (approved, message).
+
+    When `approved` is False, the caller MUST NOT run the tool and should return
+    `message` to the user. Approvals are keyed by (tool, args), so after the human
+    approves the model just re-invokes the SAME tool with the SAME arguments — no
+    token to thread through. The human clicking Approve (page or Slack) is the only
+    thing that flips the stored state to "approved".
+    """
+    call_key = _call_key(tool_name, args)
+    token, rec = _find_by_call_key(call_key)
+    action = _describe_call(tool_name, args)
+
+    if rec is not None:
+        status = rec["status"]
+        if status == "approved":
+            _PENDING_APPROVALS.pop(token, None)  # one-time use
+            return True, None
+        if status == "denied":
+            _PENDING_APPROVALS.pop(token, None)
+            return False, f"❌ You denied this action ({action}), so I did not run it."
+        return False, (
+            f"⏳ Still waiting for your approval of `{action}` — open the link or tap "
+            f"**Approve** in Slack, then ask me to continue."
+        )
+
+    # No record yet: register a pending request and surface the approval channels.
+    token = secrets.token_urlsafe(24)
+    _PENDING_APPROVALS[token] = {
+        "action": action,
+        "status": "pending",
+        "created": time.time(),
+        "call_key": call_key,
+    }
     base = os.getenv("MCP_PUBLIC_URL", "").rstrip("/")
-    if not approval_token:
-        token = secrets.token_urlsafe(24)
-        _PENDING_APPROVALS[token] = {"action": action, "status": "pending", "created": time.time()}
-        link = f"{base}/approve/{token}"
-        await _slack_post_approval(token, action)  # out-of-band push (best-effort)
-        return False, (
-            "APPROVAL REQUIRED — the action was NOT performed.\n\n"
-            "INSTRUCTIONS FOR THE ASSISTANT: Show the user the full approval URL below "
-            "exactly as written, on its own line, so it renders as a clickable link. Do "
-            "NOT paraphrase it, shorten it, or say 'the link above' — the user cannot see "
-            "your tool output, only what you write. Then stop and wait for the user.\n\n"
-            f"Action awaiting approval: {action}\n\n"
-            f"Approval URL: {link}\n\n"
-            f"After the user says they approved, call this tool again with "
-            f'approval_token="{token}" to proceed. Until they approve, that call will '
-            "report still-pending."
-        )
-    rec = _PENDING_APPROVALS.get(approval_token)
-    if rec is None:
-        return False, (
-            f"⚠️ Approval token `{approval_token}` is unknown or expired — "
-            f"ask me to request approval again."
-        )
-    status = rec["status"]
-    if status == "approved":
-        return True, "approved"
-    if status == "denied":
-        _PENDING_APPROVALS.pop(approval_token, None)
-        return False, "❌ You denied this action, so I did not run it."
+    link = f"{base}/approve/{token}"
+    await _slack_post_approval(token, action)  # out-of-band push (best-effort)
     return False, (
-        f"⏳ Still waiting for your approval — open the link, click **Approve**, then "
-        f"ask me to continue (approval token `{approval_token}`)."
+        "APPROVAL REQUIRED — the action was NOT performed.\n\n"
+        "INSTRUCTIONS FOR THE ASSISTANT: Show the user the full approval URL below "
+        "exactly as written, on its own line, so it renders as a clickable link. Do "
+        "NOT paraphrase it, shorten it, or say 'the link above' — the user cannot see "
+        "your tool output, only what you write. Then stop and wait for the user.\n\n"
+        f"Action awaiting approval: {action}\n\n"
+        f"Approval URL: {link}\n\n"
+        "After the user approves, call the SAME tool again with the SAME arguments to "
+        "proceed. Until they approve, that call will report still-pending."
     )
 
 
@@ -518,24 +548,30 @@ def _verify_slack_signature(timestamp: str, body: bytes, signature: str) -> bool
     return hmac.compare_digest(expected, signature)
 
 
-async def gated_demo_action(message: str, approval_token: str | None = None) -> str:
-    """DEMO of the out-of-band human approval gate (no real side effect).
+# Tools exempt from the approval gate (e.g. trivial/free lookups). Comma-separated
+# tool names in XMCP_APPROVAL_EXEMPT; empty by default => every tool is gated.
+def _approval_exempt() -> set[str]:
+    return parse_csv_env("XMCP_APPROVAL_EXEMPT")
 
-    A stand-in for a future write/destructive tool. On the first call it returns an
-    approval link and does NOT act; after you open the link, click Approve, and ask
-    me to continue, re-invoke with the token and it "runs". Proves the loop end to end.
 
-    Args:
-        message: Any text describing the pretend action.
-        approval_token: Leave empty on the first call. When re-invoking after you've
-            approved, pass the token shown in the approval prompt.
+class ApprovalMiddleware(Middleware):
+    """Gate EVERY tool call behind out-of-band human approval (see require_approval_for_call).
+
+    The first call to a (tool, args) combo short-circuits with an approval request and
+    does NOT run the tool; once the human approves (page or Slack), re-calling the same
+    tool with the same args runs it. The model can't forge the server-side approval, so
+    this gates all tools — the OpenAPI X-API tools and grok_x_search alike — uniformly.
     """
-    approved, note = await require_approval(f"gated_demo_action — {message!r}", approval_token)
-    if not approved:
-        return note
-    if approval_token:
-        _PENDING_APPROVALS.pop(approval_token, None)  # one-time use
-    return f"✅ Approved by you — performed the demo action: {message!r}"
+
+    async def on_call_tool(self, context, call_next):  # type: ignore[no-untyped-def]
+        tool_name = context.message.name
+        if tool_name in _approval_exempt():
+            return await call_next(context)
+        args = dict(context.message.arguments or {})
+        approved, note = await require_approval_for_call(tool_name, args)
+        if not approved:
+            return ToolResult(content=note)
+        return await call_next(context)
 
 
 async def grok_x_search(query: str) -> str:
@@ -734,11 +770,12 @@ def create_mcp() -> FastMCP:
     if not keep_output_schema and getattr(grok_tool, "output_schema", None) is not None:
         grok_tool.output_schema = None
 
-    # Out-of-band human-in-the-loop demo tool + its approval page. See require_approval.
-    demo_tool = mcp.add_tool(gated_demo_action)
-    if not keep_output_schema and getattr(demo_tool, "output_schema", None) is not None:
-        demo_tool.output_schema = None
+    # Gate EVERY tool (X-API + grok) behind out-of-band human approval. One middleware
+    # covers all of them, including the auto-generated OpenAPI tools that can't take an
+    # approval param. Exempt specific tools via XMCP_APPROVAL_EXEMPT.
+    mcp.add_middleware(ApprovalMiddleware())
 
+    # Out-of-band human-in-the-loop approval page + Slack interactivity endpoint.
     @mcp.custom_route("/approve/{token}", methods=["GET", "POST"], include_in_schema=False)
     async def approve_route(request):  # type: ignore[no-untyped-def]
         from starlette.responses import HTMLResponse
