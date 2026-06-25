@@ -11,7 +11,7 @@ RestartSec=5
 Environment=PATH=/home/wes/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Loopback-only (127.0.0.1); screens untrusted X content for the x-mcp guardrail
 # middleware. THREAT-MODEL.md Layer 4 (detect leg). x-mcp fails CLOSED if this is down.
-Environment=GUARDRAIL_PORT=8041
+Environment=GUARDRAIL_PORT=8071
 # Needed so PromptGuard resolves the HF token + model cache at ~/.cache/huggingface.
 Environment=HOME=/home/wes
 

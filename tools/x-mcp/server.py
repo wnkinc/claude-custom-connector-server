@@ -29,7 +29,7 @@ from requests_oauthlib import OAuth1Session
 # Google-OAuth provider used by every public-facing mcp-tools server.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from shared.auth import build_oauth_provider  # noqa: E402
-from shared.guardrail import GuardrailMiddleware  # noqa: E402
+from security.guardrail.middleware import GuardrailMiddleware  # noqa: E402
 
 HTTP_METHODS = {
     "get",
@@ -821,7 +821,7 @@ def create_mcp() -> FastMCP:
     # screens results of calls the human already approved.
     mcp.add_middleware(ApprovalMiddleware())
     # THREAT-MODEL L4 (detect): screen untrusted X content through the guardrail service
-    # (:8041) before it reaches the model. Fails CLOSED if the service is down.
+    # (:8071) before it reaches the model. Fails CLOSED if the service is down.
     mcp.add_middleware(GuardrailMiddleware(source="xmcp"))
 
     # Out-of-band human-in-the-loop approval page + Slack interactivity endpoint.

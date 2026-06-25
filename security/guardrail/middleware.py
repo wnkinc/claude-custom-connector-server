@@ -3,7 +3,7 @@
 Ports the SAE DeerFlow `guardrail_interceptor` to a FastMCP **middleware**, since
 mcp-tools servers expose tools to Claude directly (no DeerFlow interceptor hook).
 :class:`GuardrailMiddleware` screens the RESULT of every tool call through the
-guardrail service (LlamaFirewall PromptGuard/HiddenASCII, :8041) BEFORE it reaches
+guardrail service (LlamaFirewall PromptGuard/HiddenASCII, :8071) BEFORE it reaches
 the model:
 
 - allow                       -> wrap content in <untrusted_x_content> (treat as DATA)
@@ -72,7 +72,7 @@ class GuardrailMiddleware(Middleware):
         timeout: float = 20.0,
     ) -> None:
         self.guardrail_url = (
-            guardrail_url or os.getenv("GUARDRAIL_URL", "http://127.0.0.1:8041")
+            guardrail_url or os.getenv("GUARDRAIL_URL", "http://127.0.0.1:8071")
         ).rstrip("/")
         self.source = source
         self.timeout = timeout

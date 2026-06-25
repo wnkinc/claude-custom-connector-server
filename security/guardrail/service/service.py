@@ -113,7 +113,7 @@ def scan(req: ScanRequest) -> ScanResponse:
 def main() -> None:
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("GUARDRAIL_PORT", "8041")))
+    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("GUARDRAIL_PORT", "8071")))
 
 
 if __name__ == "__main__":

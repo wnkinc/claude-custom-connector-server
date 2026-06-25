@@ -79,10 +79,10 @@ data. Verified end-to-end: the DeerFlow lead agent calls `searchPostsRecent` →
 
 ## Content screening — guardrail middleware (L4 detect)
 
-xMCP's returned X content is screened through the guardrail service (`:8041`)
-**before** it reaches the model. Unlike the SAE instance (which screens via
+xMCP's returned X content is screened through the guardrail service (`:8071`)
+**before** it reaches the model. Unlike the SAE instance (which screened via
 DeerFlow's `mcpInterceptors` hook), this public instance serves Claude directly, so
-screening is a **FastMCP middleware** — `shared/guardrail.py::GuardrailMiddleware`,
+screening is a **FastMCP middleware** — `security/guardrail/middleware.py::GuardrailMiddleware`,
 registered in `server.py::create_mcp`:
 
 - It screens the RESULT of **every** tool call (all of them return untrusted X

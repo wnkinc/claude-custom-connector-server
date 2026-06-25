@@ -6,7 +6,7 @@
 #
 # Creates tools/<name>/ with a minimal FastMCP server pre-wired to the shared
 # Google OAuth (shared/auth.py), an env.example, and a hardened systemd unit
-# rendered from shared/systemd/unit.template. It does NOT touch Cloudflare or
+# rendered from scripts/templates/unit.template. It does NOT touch Cloudflare or
 # systemd -- it prints the exact follow-up commands.
 set -euo pipefail
 
@@ -72,7 +72,7 @@ ENV
 sed -e "s|__NAME__|${UNIT_NAME}|g" \
     -e "s|__PORT__|${PORT}|g" \
     -e "s|__DIR__|${DIR}|g" \
-    "$ROOT/shared/systemd/unit.template" > "$DIR/systemd/${UNIT_NAME}.service"
+    "$ROOT/scripts/templates/unit.template" > "$DIR/systemd/${UNIT_NAME}.service"
 
 cat <<DONE
 Created tools/${NAME}/ (port ${PORT}, subdomain ${SUBDOMAIN}).

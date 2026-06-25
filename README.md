@@ -8,9 +8,12 @@ Tunnel, with each tool gated by Google OAuth (verified-email allowlist).
 
 ```
 mcp-tools/
-  shared/
-    auth.py              # Google OAuth provider (email allowlist, fail-closed) reused by every tool
-    systemd/unit.template# hardened --user service template
+  shared/                # generic plumbing imported by every tool server
+    auth.py              #   Google OAuth provider (email allowlist, fail-closed)
+  security/              # threat-model security layers
+    guardrail/
+      middleware.py      #   L4 detect: FastMCP middleware that screens tool output
+      service/           #   standalone LlamaFirewall scan service (loopback :8071)
   tools/
     x-mcp/               # first tool: X (Twitter) read-only search/lookup + Grok x_search
       server.py          #   vendored+patched FastMCP server (see VENDORED.md) + OAuth wiring
@@ -19,6 +22,8 @@ mcp-tools/
   scripts/
     new-tool.sh          # stamp a new tool (dir + server stub + unit)
     add-tunnel-route.sh  # add Cloudflare ingress + DNS for a tool
+    templates/
+      unit.template      # hardened --user service template (used by new-tool.sh)
   docs/
     SETUP.md             # step-by-step runbook (start here)
     ARCHITECTURE.md      # how it fits together + why it's built this way
