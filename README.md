@@ -19,6 +19,10 @@ mcp-tools/
       server.py          #   vendored+patched FastMCP server (see VENDORED.md) + OAuth wiring
       systemd/mcp-xmcp.service
       env.example
+    data/                # market-data ingest into a canonical parquet data lake (:8062)
+      server.py          #   FastMCP server (OAuth) + in-process run registry
+      pipeline.py        #   deterministic fetch → normalize → enforce → store
+      systemd/mcp-data.service
   scripts/
     new-tool.sh          # stamp a new tool (dir + server stub + unit)
     add-tunnel-route.sh  # add Cloudflare ingress + DNS for a tool

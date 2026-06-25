@@ -1,0 +1,67 @@
+[Unit]
+# Hardened systemd SYSTEM unit template for an mcp-tools server.
+# Placeholders: mcp-data (unit + state dir name), 8062 (loopback MCP port),
+# /home/wes/Documents/mcp-tools/tools/data (tool dir holding server.py and .venv), 8074 (this tool's squid
+# egress listener), wes (unprivileged run-as user).
+# SYSTEM unit (not --user) so (a) IPAddressDeny/Allow actually enforce the egress
+# wall and (b) it starts at boot. Install via scripts/install-system.sh (sudo once).
+Description=MCP tool: mcp-data (public, Google-OAuth gated via Cloudflare Tunnel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wes
+Group=wes
+WorkingDirectory=/home/wes/Documents/mcp-tools/tools/data
+# MCP_PORT is read by main() BEFORE .env loads, so it MUST live here, not in .env.
+Environment=MCP_HOST=127.0.0.1
+Environment=MCP_PORT=8062
+Environment=HOME=/home/wes
+Environment=PATH=/home/wes/.local/bin:/usr/local/bin:/usr/bin:/bin
+# OAuth state stays writable under ProtectHome=read-only via StateDirectory (/var/lib/mcp-data).
+StateDirectory=mcp-data
+Environment=FASTMCP_HOME=%S/mcp-data
+
+# --- L2 egress: all outbound traffic MUST go through the egress proxy ---
+# This tool's per-tool squid listener (:8074) enforces its domain
+# allowlist (security/egress-proxy/allowlist/mcp-data.txt). The IPAddress wall makes
+# the proxy the ONLY route off-box; NO_PROXY keeps loopback (guardrail, resolver) direct.
+Environment=HTTPS_PROXY=http://127.0.0.1:8074
+Environment=HTTP_PROXY=http://127.0.0.1:8074
+Environment=NO_PROXY=127.0.0.1,localhost
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/8
+
+ExecStart=/home/wes/Documents/mcp-tools/tools/data/.venv/bin/python server.py
+Restart=on-failure
+RestartSec=5
+
+# --- Hardening (L3) ---
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# Enforceable as a SYSTEM unit (these silently failed in --user mode):
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+
+[Install]
+WantedBy=multi-user.target

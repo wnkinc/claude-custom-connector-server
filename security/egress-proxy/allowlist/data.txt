@@ -1,0 +1,16 @@
+# data egress allowlist (squid dstdomain). One host per line; leading dot = subdomains.
+# Keep this to the MINIMUM. Discover misses from TCP_DENIED in
+# /var/log/squid/access.log, add the host here, then `sudo systemctl reload squid`.
+
+# Yahoo Finance — yfinance's download endpoints + cookie/crumb bootstrap.
+.finance.yahoo.com
+query1.finance.yahoo.com
+query2.finance.yahoo.com
+fc.yahoo.com
+
+# Google OAuth — the public instance verifies tokens + fetches JWKS server-side.
+# (Confirm the exact set from the access log on first login.)
+accounts.google.com
+oauth2.googleapis.com
+www.googleapis.com
+openidconnect.googleapis.com
