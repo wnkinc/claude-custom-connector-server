@@ -58,8 +58,15 @@ NEW_STATE="/var/lib/mcp-xmcp"
 if [ -d "$OLD_STATE" ] && [ ! -e "$NEW_STATE" ]; then
   install -d -m 0700 -o "$OWNER" -g "$OWNER" "$NEW_STATE"
   cp -a "$OLD_STATE"/. "$NEW_STATE"/ 2>/dev/null || true
+  # FastMCP's OAuth filetree store BAKES its absolute root path into *-info.json
+  # metadata. Without rewriting it, the store rejects the new location with
+  # PathSecurityError and client registration (DCR) fails. Repoint old -> new so
+  # the Claude connector keeps working without re-auth.
+  OLD_ESC="${OLD_STATE//./\\.}"
+  grep -rl "$OLD_STATE" "$NEW_STATE" 2>/dev/null \
+    | xargs -r sed -i "s#${OLD_ESC}#${NEW_STATE}#g"
   chown -R "$OWNER":"$OWNER" "$NEW_STATE"
-  echo "  copied $OLD_STATE -> $NEW_STATE"
+  echo "  copied + repointed $OLD_STATE -> $NEW_STATE"
 else
   echo "  (skip: no old state, or /var/lib/mcp-xmcp already exists)"
 fi
