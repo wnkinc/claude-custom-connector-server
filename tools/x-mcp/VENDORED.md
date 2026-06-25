@@ -108,10 +108,13 @@ block, like, etc.
 
 ## Security posture (THREAT-MODEL)
 
-- **L1 — minimize grant (server-side):** `X_API_TOOL_ALLOWLIST` restricts to a
-  small set of **public read/search** operationIds; **all 68 write ops never
-  exist** as tools. Read-only **bearer token** only; OAuth1 user flow left empty
-  (no act-as-account). This is enforced at the source, before DeerFlow sees it.
+- **L1 — minimize grant (server-side):** read-only is **code-enforced**, not just
+  a `.env` convention. The allowlist defaults to a hardcoded 8-op read set
+  (`DEFAULT_READ_ALLOWLIST`) when `X_API_TOOL_ALLOWLIST` is blank — a missing/typo'd
+  `.env` fails **closed to read-only**, not open to all 165 ops. A write-guard
+  drops every non-GET op unless `X_API_ALLOW_WRITES=1`, so **all write ops never
+  exist** as tools regardless of the allowlist. Read-only **bearer token** only;
+  OAuth1 user flow left empty (no act-as-account). Enforced at the source.
 - **L2/L3:** loopback-bound (`127.0.0.1:8051`); only reaches `api.x.com`; runs in
   its own venv under a hardened systemd unit (2a.2).
 - **L4/L5:** content screening + allowed-tools isolation on the DeerFlow side

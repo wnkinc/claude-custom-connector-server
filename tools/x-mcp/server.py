@@ -41,6 +41,23 @@ HTTP_METHODS = {
     "trace",
 }
 
+# THREAT-MODEL L1 (minimize the grant): code-enforced read-only default. The safe
+# grant lives HERE, in version control -- not solely in a gitignored `.env`. An
+# empty/missing `X_API_TOOL_ALLOWLIST` falls back to exactly these read ops (NOT
+# "expose everything"), so a misconfigured deploy fails closed to read-only instead
+# of silently exposing all 165 X operations (68 of them writes). `.env` may still
+# set `X_API_TOOL_ALLOWLIST` to NARROW or customize this.
+DEFAULT_READ_ALLOWLIST = {
+    "searchPostsRecent",
+    "getPostsById",
+    "getPostsByIds",
+    "getUsersByUsername",
+    "getUsersByUsernames",
+    "getUsersById",
+    "searchUsers",
+    "getPostsCountsRecent",
+}
+
 LOGGER = logging.getLogger("xmcp.x_api")
 OAUTH_LOGGER = logging.getLogger("xmcp.oauth1")
 
@@ -253,9 +270,16 @@ def filter_openapi_spec(spec: dict) -> dict:
     paths = filtered.get("paths", {})
     new_paths = {}
     allow_tags = {tag.lower() for tag in parse_csv_env("X_API_TOOL_TAGS")}
-    allow_ops = parse_csv_env("X_API_TOOL_ALLOWLIST")
+    # Default-deny: an empty/missing allowlist falls back to the read-only default,
+    # never "expose everything". See DEFAULT_READ_ALLOWLIST.
+    allow_ops = parse_csv_env("X_API_TOOL_ALLOWLIST") or set(DEFAULT_READ_ALLOWLIST)
     deny_ops = parse_csv_env("X_API_TOOL_DENYLIST")
+    # Write-guard: non-GET (mutate) operations are NEVER exposed unless writes are
+    # explicitly opted in, regardless of what the allowlist contains. Makes "this is
+    # a read-only tool" true by construction, not by trusting the allowlist string.
+    allow_writes = is_truthy(os.getenv("X_API_ALLOW_WRITES"))
 
+    n_write_blocked = 0
     for path, item in paths.items():
         if not isinstance(item, dict):
             continue
@@ -264,6 +288,9 @@ def filter_openapi_spec(spec: dict) -> dict:
         for key, value in item.items():
             if key.lower() in HTTP_METHODS:
                 if should_exclude_operation(path, value):
+                    continue
+                if key.lower() != "get" and not allow_writes:
+                    n_write_blocked += 1
                     continue
                 operation_id = value.get("operationId")
                 operation_tags = [
@@ -283,6 +310,20 @@ def filter_openapi_spec(spec: dict) -> dict:
             new_paths[path] = new_item
 
     filtered["paths"] = new_paths
+    n_tools = sum(
+        1
+        for item in new_paths.values()
+        for method in item
+        if method.lower() in HTTP_METHODS
+    )
+    used_default = not parse_csv_env("X_API_TOOL_ALLOWLIST")
+    LOGGER.warning(
+        "X grant: %d tools exposed, writes=%s, allowlist=%s (%d write ops blocked)",
+        n_tools,
+        "ON" if allow_writes else "OFF",
+        "DEFAULT(read-only)" if used_default else "env",
+        n_write_blocked,
+    )
     return filtered
 
 

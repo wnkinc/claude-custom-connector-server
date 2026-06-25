@@ -72,15 +72,24 @@ The MCP endpoint is `http://127.0.0.1:8000/mcp` by default.
 
 ## Whitelisting tools
 
-Use `X_API_TOOL_ALLOWLIST` to load a small, explicit set of tools:
+The server is **read-only by default, enforced in code** (THREAT-MODEL L1):
+
+- If `X_API_TOOL_ALLOWLIST` is blank/unset, it falls back to a hardcoded set of 8
+  read ops (`DEFAULT_READ_ALLOWLIST` in `server.py`) — a missing/typo'd `.env`
+  fails **closed to read-only**, never "expose all 165 ops".
+- Write (non-GET) operations are **never** exposed unless `X_API_ALLOW_WRITES=1`,
+  regardless of the allowlist — so a write op can't leak in via a typo.
+
+Use `X_API_TOOL_ALLOWLIST` only to **narrow or customize** the default read set:
 
 ```
-X_API_TOOL_ALLOWLIST=getUsersByUsername,createPosts,searchPostsRecent
+X_API_TOOL_ALLOWLIST=getUsersByUsername,searchPostsRecent
 ```
 
-Whitelisting is applied at startup when the OpenAPI spec is loaded, so restart
-the server after changes. See the full tool list below before building your
-allowlist.
+Filtering is applied at startup when the OpenAPI spec is loaded, so restart the
+server after changes. The startup log prints the effective grant (`X grant: N
+tools exposed, writes=OFF, ...`). See the full tool list below before building
+your allowlist.
 
 ## OAuth1 flow (startup behavior)
 
