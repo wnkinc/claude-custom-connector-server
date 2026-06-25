@@ -1,29 +1,43 @@
 [Unit]
-# Hardened systemd --user unit template for an mcp-tools server.
-# Placeholders: __NAME__ (unit + state dir name), __PORT__ (loopback port),
-# __DIR__ (absolute path to the tool dir holding server.py and .venv).
-# Install: see scripts/new-tool.sh, or copy to ~/.config/systemd/user/__NAME__.service
+# Hardened systemd SYSTEM unit template for an mcp-tools server.
+# Placeholders: __NAME__ (unit + state dir name), __PORT__ (loopback MCP port),
+# __DIR__ (tool dir holding server.py and .venv), __PROXY_PORT__ (this tool's squid
+# egress listener), __USER__ (unprivileged run-as user).
+# SYSTEM unit (not --user) so (a) IPAddressDeny/Allow actually enforce the egress
+# wall and (b) it starts at boot. Install via scripts/install-system.sh (sudo once).
 Description=MCP tool: __NAME__ (public, Google-OAuth gated via Cloudflare Tunnel)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
+User=__USER__
+Group=__USER__
 WorkingDirectory=__DIR__
 # MCP_PORT is read by main() BEFORE .env loads, so it MUST live here, not in .env.
 Environment=MCP_HOST=127.0.0.1
 Environment=MCP_PORT=__PORT__
-Environment=HOME=%h
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-# OAuth client registrations + encrypted tokens need a writable home. StateDirectory
-# creates ~/.local/state/__NAME__ and keeps it writable even under ProtectHome=read-only.
+Environment=HOME=/home/__USER__
+Environment=PATH=/home/__USER__/.local/bin:/usr/local/bin:/usr/bin:/bin
+# OAuth state stays writable under ProtectHome=read-only via StateDirectory (/var/lib/__NAME__).
 StateDirectory=__NAME__
 Environment=FASTMCP_HOME=%S/__NAME__
+
+# --- L2 egress: all outbound traffic MUST go through the egress proxy ---
+# This tool's per-tool squid listener (:__PROXY_PORT__) enforces its domain
+# allowlist (security/egress-proxy/allowlist/__NAME__.txt). The IPAddress wall makes
+# the proxy the ONLY route off-box; NO_PROXY keeps loopback (guardrail, resolver) direct.
+Environment=HTTPS_PROXY=http://127.0.0.1:__PROXY_PORT__
+Environment=HTTP_PROXY=http://127.0.0.1:__PROXY_PORT__
+Environment=NO_PROXY=127.0.0.1,localhost
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/8
+
 ExecStart=__DIR__/.venv/bin/python server.py
 Restart=on-failure
 RestartSec=5
 
-# --- Hardening (the namespace/seccomp subset that works in a --user unit) ---
+# --- Hardening (L3) ---
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
@@ -36,9 +50,18 @@ LockPersonality=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
-# Omitted (require capability drops, unsupported in --user units; the process
-# already runs unprivileged): CapabilityBoundingSet, PrivateDevices, ProtectClock,
-# ProtectHostname, ProtectKernel{Tunables,Modules,Logs}, ProtectControlGroups.
+# Enforceable as a SYSTEM unit (these silently failed in --user mode):
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

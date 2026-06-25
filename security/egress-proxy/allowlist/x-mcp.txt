@@ -1,0 +1,12 @@
+# x-mcp egress allowlist (squid dstdomain). One host per line; a leading dot
+# matches subdomains. Keep this to the MINIMUM. If the positive-path validation
+# (esp. Google login) fails, look for TCP_DENIED in /var/log/squid/access.log, add
+# the host here, and `sudo systemctl reload squid`.
+api.x.com
+api.x.ai
+# Google OAuth — the public instance verifies tokens + fetches JWKS server-side.
+# (Discover/confirm the exact set from the access log on first login.)
+accounts.google.com
+oauth2.googleapis.com
+www.googleapis.com
+openidconnect.googleapis.com

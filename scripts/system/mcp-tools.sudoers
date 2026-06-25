@@ -1,0 +1,26 @@
+# mcp-tools: passwordless service lifecycle for the operator/agent.
+#
+# Installed to /etc/sudoers.d/mcp-tools (mode 0440) by scripts/install-system.sh.
+# Scope is DELIBERATELY narrow: only `systemctl` verbs on the mcp-tools units, so a
+# reboot, a crash (Restart=on-failure), or a manual/agent `restart` brings services
+# back online with no password -- without granting general root. Validate with
+# `visudo -cf` before installing.
+#
+# Note: each Cmnd is `systemctl <verb> <unit-glob>` with the unit as a single arg;
+# extra arguments do not match the rule (no option-injection).
+
+Cmnd_Alias MCP_CTL = \
+    /usr/bin/systemctl start mcp-*, \
+    /usr/bin/systemctl stop mcp-*, \
+    /usr/bin/systemctl restart mcp-*, \
+    /usr/bin/systemctl reload mcp-*, \
+    /usr/bin/systemctl status mcp-*, \
+    /usr/bin/systemctl is-active mcp-*, \
+    /usr/bin/systemctl start squid.service, \
+    /usr/bin/systemctl stop squid.service, \
+    /usr/bin/systemctl restart squid.service, \
+    /usr/bin/systemctl reload squid.service, \
+    /usr/bin/systemctl status squid.service, \
+    /usr/bin/systemctl is-active squid.service
+
+wes ALL=(root) NOPASSWD: MCP_CTL

@@ -9,10 +9,14 @@ Claude desktop / claude.ai web / mobile     (custom connector, private to your a
 xmcp.secure-agentic-engineering.com          Cloudflare edge — TLS, hides home IP, WAF
         │  Cloudflare Tunnel (cloudflared, outbound-only; NO Access policy on this host)
         ▼
-127.0.0.1:8061                               x-mcp FastMCP server (this Linux box)
+127.0.0.1:8061                               x-mcp FastMCP server (system unit, egress-walled)
         │  FastMCP owns OAuth: "Sign in with Google", locked to an email allowlist
+        │  ALL outbound traffic forced through the loopback proxy (IPAddressDeny=any
+        │  makes it the only route off-box); results screened by the guardrail (:8071)
         ▼
-api.x.com (read-only bearer, allowlisted ops) + api.x.ai (grok_x_search)
+127.0.0.1:8073  squid egress proxy           per-tool domain allowlist, default-deny, audit log
+        ▼
+api.x.com (read-only bearer, allowlisted ops) + api.x.ai (grok_x_search) + Google OAuth verify
 ```
 
 ## Why each choice
@@ -35,6 +39,22 @@ api.x.com (read-only bearer, allowlisted ops) + api.x.ai (grok_x_search)
   hardening, code-scoped egress, tool allowlists). A bug or bad dep in one tool
   can't reach another's credentials. The obvious "one endpoint, all tools"
   alternative is Cloudflare's MCP Portal — which is the thing broken by #410.
+
+- **System units, not `--user` (THREAT-MODEL L2/L3).** Tools run as `User=wes`
+  system services so two things actually hold: (1) `IPAddressDeny=any` /
+  `IPAddressAllow=127.0.0.1/8` *enforce* the egress wall — it silently no-ops in
+  `--user` units here (no BPF/net controller delegated) — and (2) they start at
+  boot without login. Lifecycle stays low-friction via a scoped passwordless
+  sudoers drop-in (`scripts/system/mcp-tools.sudoers`). Bootstrap: `sudo
+  scripts/install-system.sh`.
+
+- **Egress allowlist via a loopback proxy (L2, "strongest single control").**
+  Every tool is forced through the squid proxy (`security/egress-proxy/`,
+  `:8073` per-tool listener) by `HTTPS_PROXY` + the IPAddress wall, so a hostile
+  dep that ignores the proxy env is dropped at the kernel; the proxy enforces a
+  per-tool domain allowlist (default-deny) and is the central egress audit log.
+  Verified: a direct (proxy-ignoring) connection under the tool's restriction is
+  dropped, while `api.x.com`/`api.x.ai` succeed through the proxy.
 
 - **Google OAuth with a verified-email allowlist, fail-closed.** `GoogleProvider`
   authenticates *any* Google account; `shared/auth.py` (`GoogleAllowlistProvider`)
