@@ -22,7 +22,7 @@ from fastmcp import FastMCP
 # Make the repo root importable regardless of CWD (systemd runs us from the tool
 # dir), then load the shared Google-OAuth provider used by every public server.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from security.auth import build_oauth_provider  # noqa: E402
+from security.serve import serve  # noqa: E402
 
 import pipeline  # noqa: E402
 import runs  # noqa: E402
@@ -164,12 +164,9 @@ def data_read(
 
 def main() -> None:
     load_env()
-    host = os.getenv("MCP_HOST", "127.0.0.1")
     port = int(os.getenv("MCP_PORT", "8062"))
-    auth = build_oauth_provider()
-    if auth is not None:
-        mcp.auth = auth
-    mcp.run(transport="http", host=host, port=port)
+    # data returns trusted, internally-generated content -> no guardrail / approval.
+    serve(mcp, port=port)
 
 
 if __name__ == "__main__":

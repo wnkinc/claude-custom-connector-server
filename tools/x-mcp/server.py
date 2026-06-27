@@ -21,9 +21,7 @@ from requests_oauthlib import OAuth1Session
 # (systemd runs us from the tool dir), then pull in the shared security helpers used
 # by every public-facing mcp-tools server.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from security.auth import build_oauth_provider  # noqa: E402
-from security.approval.middleware import ApprovalMiddleware, register_approval_routes  # noqa: E402
-from security.guardrail.middleware import GuardrailMiddleware  # noqa: E402
+from security.serve import serve  # noqa: E402
 
 HTTP_METHODS = {
     "get",
@@ -590,38 +588,17 @@ def create_mcp() -> FastMCP:
     if not keep_output_schema and getattr(grok_tool, "output_schema", None) is not None:
         grok_tool.output_schema = None
 
-    # Gate EVERY tool (X-API + grok) behind out-of-band human approval. One middleware
-    # covers all of them, including the auto-generated OpenAPI tools that can't take an
-    # approval param. Exempt specific tools via XMCP_APPROVAL_EXEMPT.
-    # ORDER MATTERS: FastMCP wraps reversed(self.middleware), so the FIRST added is the
-    # OUTERMOST. Approval must be outermost (it short-circuits BEFORE the tool runs, so a
-    # pending-approval message is never screened); the guardrail sits INSIDE it and only
-    # screens results of calls the human already approved.
-    mcp.add_middleware(ApprovalMiddleware(exempt=parse_csv_env("XMCP_APPROVAL_EXEMPT")))
-    # THREAT-MODEL L4 (detect): screen untrusted X content through the guardrail service
-    # (:8071) before it reaches the model. Fails CLOSED if the service is down.
-    mcp.add_middleware(GuardrailMiddleware(source="xmcp"))
-
-    # Out-of-band human-in-the-loop approval: the /approve/{token} page + Slack webhook.
-    register_approval_routes(mcp)
-
-    # PATCHED (mcp-tools): attach MCP-native OAuth for public serving. When auth is
-    # disabled (MCP_AUTH_ENABLED off) build_oauth_provider() returns None and the
-    # server behaves exactly like the original loopback build (e.g. for a local
-    # agent on 127.0.0.1). When enabled, FastMCP serves the OAuth discovery
-    # metadata, DCR, and the WWW-Authenticate header that claude.ai web/mobile need.
-    auth_provider = build_oauth_provider()
-    if auth_provider is not None:
-        mcp.auth = auth_provider
-
+    # The shared security layers (approval gate, guardrail screening, OAuth) and the
+    # HTTP run are applied uniformly by security.serve.serve() in main().
     return mcp
 
 
 def main() -> None:
-    host = os.getenv("MCP_HOST", "127.0.0.1")
     port = int(os.getenv("MCP_PORT", "8000"))
     mcp = create_mcp()
-    mcp.run(transport="http", host=host, port=port)
+    # x-mcp returns UNTRUSTED external X content, so screen output; and gate every call
+    # behind out-of-band human approval. guardrail_source tags the wrapped content.
+    serve(mcp, port=port, untrusted_output=True, require_approval=True, guardrail_source="xmcp")
 
 
 if __name__ == "__main__":

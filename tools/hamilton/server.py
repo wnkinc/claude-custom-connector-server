@@ -6,7 +6,7 @@ from fastmcp import FastMCP
 
 # Make the repo root importable regardless of CWD, then load shared OAuth.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from security.auth import build_oauth_provider  # noqa: E402
+from security.serve import serve  # noqa: E402
 
 import catalog  # noqa: E402
 
@@ -42,12 +42,9 @@ def library_lineage(name: str) -> dict:
 
 def main() -> None:
     load_env()
-    host = os.getenv("MCP_HOST", "127.0.0.1")
     port = int(os.getenv("MCP_PORT", "8064"))
-    auth = build_oauth_provider()
-    if auth is not None:
-        mcp.auth = auth
-    mcp.run(transport="http", host=host, port=port)
+    # hamilton returns trusted, internally-generated content -> no guardrail / approval.
+    serve(mcp, port=port)
 
 
 if __name__ == "__main__":

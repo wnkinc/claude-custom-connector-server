@@ -5,7 +5,8 @@
 #   scripts/new-tool.sh weather 8062 weather.secure-agentic-engineering.com
 #
 # Creates tools/<name>/ with a minimal FastMCP server pre-wired to the shared
-# Google OAuth (shared/auth.py), an env.example, a hardened SYSTEM systemd unit
+# serve() helper (security/serve.py: OAuth + optional guardrail/approval), an
+# env.example, a hardened SYSTEM systemd unit
 # (egress-walled), and a per-tool egress allowlist stub. It does NOT touch
 # Cloudflare, systemd, or /etc -- it prints the exact follow-up commands.
 set -euo pipefail
@@ -32,9 +33,10 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
-# Make repo-root shared/ importable regardless of CWD, then load shared OAuth.
+# Make the repo root importable regardless of CWD, then load the shared serve()
+# helper (applies OAuth + optional guardrail/approval, then runs).
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from shared.auth import build_oauth_provider  # noqa: E402
+from security.serve import serve  # noqa: E402
 
 mcp = FastMCP(name="${NAME}")
 
@@ -46,12 +48,10 @@ def ping() -> str:
 
 
 def main() -> None:
-    host = os.getenv("MCP_HOST", "127.0.0.1")
     port = int(os.getenv("MCP_PORT", "${PORT}"))
-    auth = build_oauth_provider()
-    if auth is not None:
-        mcp.auth = auth
-    mcp.run(transport="http", host=host, port=port)
+    # Trusted internal tool by default. If this tool returns UNTRUSTED external
+    # content, add: untrusted_output=True (guardrail) and/or require_approval=True.
+    serve(mcp, port=port)
 
 
 if __name__ == "__main__":
