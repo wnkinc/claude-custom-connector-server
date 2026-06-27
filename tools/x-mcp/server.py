@@ -360,15 +360,15 @@ def create_mcp() -> FastMCP:
         },
     )
 
-    # FastMCP 3.x derives an `outputSchema` for every OpenAPI tool. Claude's connector
-    # mishandles tools that advertise outputSchema -- it drops the per-tool approval
-    # toggle (and sometimes the tool) from connector settings (anthropics/claude-code#25081).
-    # Strip output_schema at build time so the wire shape matches the working one.
-    # Escape hatch: XMCP_KEEP_OUTPUT_SCHEMA=1.
-    keep_output_schema = is_truthy(os.getenv("XMCP_KEEP_OUTPUT_SCHEMA", "0"))
+    # x-mcp's tools come from FastMCP.from_openapi, whose OpenAPIProvider generates them
+    # dynamically -- serve()'s LocalProvider strip can't reach them, so their
+    # FastMCP-derived outputSchema (which breaks the Claude connector, #25081) must be
+    # nulled at BUILD time here via mcp_component_fn. Honors the same MCP_KEEP_OUTPUT_SCHEMA
+    # escape hatch as serve().
+    keep_output_schema = is_truthy(os.getenv("MCP_KEEP_OUTPUT_SCHEMA", "0"))
 
     def _strip_output_schema(_route, component) -> None:
-        if not keep_output_schema and getattr(component, "output_schema", None) is not None:
+        if getattr(component, "output_schema", None) is not None:
             component.output_schema = None
 
     mcp = FastMCP.from_openapi(
@@ -377,12 +377,8 @@ def create_mcp() -> FastMCP:
         name="X API MCP",
         mcp_component_fn=None if keep_output_schema else _strip_output_schema,
     )
-    # Register the Grok x_search tool alongside the raw X-API tools. It returns a plain
-    # str, which FastMCP 3.x also wraps in an outputSchema -- strip it too (see above).
-    grok_tool = mcp.add_tool(grok_x_search)
-    if not keep_output_schema and getattr(grok_tool, "output_schema", None) is not None:
-        grok_tool.output_schema = None
-
+    # The grok tool (add_tool -> LocalProvider) is stripped by serve()'s LocalProvider pass.
+    mcp.add_tool(grok_x_search)
     return mcp
 
 
