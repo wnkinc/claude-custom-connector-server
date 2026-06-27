@@ -1,10 +1,7 @@
 [Unit]
-# Hardened systemd SYSTEM unit template for an mcp-tools server.
-# Placeholders: mcp-data (unit + state dir name), 8062 (loopback MCP port),
-# /home/wes/Documents/mcp-tools/tools/data (tool dir holding server.py and .venv), 8074 (this tool's squid
-# egress listener), wes (unprivileged run-as user).
-# SYSTEM unit (not --user) so (a) IPAddressDeny/Allow actually enforce the egress
-# wall and (b) it starts at boot. Install via scripts/install-system.sh (sudo once).
+# Hardened systemd SYSTEM unit for an mcp-tools server (mcp-data). SYSTEM unit (not
+# --user) so (a) IPAddressDeny/Allow actually enforce the egress wall and (b) it
+# starts at boot. Install via scripts/install-system.sh (sudo once).
 Description=MCP tool: mcp-data (public, Google-OAuth gated via Cloudflare Tunnel)
 After=network-online.target
 Wants=network-online.target
@@ -25,7 +22,7 @@ Environment=FASTMCP_HOME=%S/mcp-data
 
 # --- L2 egress: all outbound traffic MUST go through the egress proxy ---
 # This tool's per-tool squid listener (:8074) enforces its domain
-# allowlist (security/egress-proxy/allowlist/mcp-data.txt). The IPAddress wall makes
+# allowlist (security/egress-proxy/allowlist/data.txt). The IPAddress wall makes
 # the proxy the ONLY route off-box; NO_PROXY keeps loopback (guardrail, resolver) direct.
 Environment=HTTPS_PROXY=http://127.0.0.1:8074
 Environment=HTTP_PROXY=http://127.0.0.1:8074

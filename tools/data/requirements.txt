@@ -1,9 +1,14 @@
-# MCP server framework + shared OAuth/.env plumbing.
-fastmcp
-python-dotenv
-# Ingest pipeline deps (same set the secure-agentic data runner uses). These are
-# the heavyweight bits the two-process split existed to isolate; here they live
-# only in this tool's venv.
-pandas>=2.2
-pyarrow>=16
-yfinance>=0.2.40
+# THREAT-MODEL L5 (provenance): pin ALL deps so a fresh `pip install -r` reproduces a
+# known set, not latest -- a floating dep silently un-audits itself on reinstall.
+# Versions below = the currently-installed set; OSV/deps.dev vetting is still TODO
+# (the deferred dep-vetting pipeline). Re-vet on any version bump.
+#
+# MCP framework + shared OAuth/.env plumbing:
+fastmcp==3.4.2
+mcp==1.28.0
+python-dotenv==1.2.2
+# Ingest pipeline deps (the heavyweight bits the SAE two-process split existed to
+# isolate; here they live only in this tool's venv):
+pandas==3.0.3
+pyarrow==24.0.0
+yfinance==1.4.1

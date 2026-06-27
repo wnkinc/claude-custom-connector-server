@@ -1,10 +1,7 @@
 [Unit]
-# Hardened systemd SYSTEM unit template for an mcp-tools server.
-# Placeholders: __NAME__ (unit + state dir name), __PORT__ (loopback MCP port),
-# __DIR__ (tool dir holding server.py and .venv), __PROXY_PORT__ (this tool's squid
-# egress listener), __USER__ (unprivileged run-as user).
-# SYSTEM unit (not --user) so (a) IPAddressDeny/Allow actually enforce the egress
-# wall and (b) it starts at boot. Install via scripts/install-system.sh (sudo once).
+# Hardened systemd SYSTEM unit for an mcp-tools server (__NAME__). SYSTEM unit (not
+# --user) so (a) IPAddressDeny/Allow actually enforce the egress wall and (b) it
+# starts at boot. Install via scripts/install-system.sh (sudo once).
 Description=MCP tool: __NAME__ (public, Google-OAuth gated via Cloudflare Tunnel)
 After=network-online.target
 Wants=network-online.target
@@ -25,7 +22,7 @@ Environment=FASTMCP_HOME=%S/__NAME__
 
 # --- L2 egress: all outbound traffic MUST go through the egress proxy ---
 # This tool's per-tool squid listener (:__PROXY_PORT__) enforces its domain
-# allowlist (security/egress-proxy/allowlist/__NAME__.txt). The IPAddress wall makes
+# allowlist (security/egress-proxy/allowlist/__TOOL__.txt). The IPAddress wall makes
 # the proxy the ONLY route off-box; NO_PROXY keeps loopback (guardrail, resolver) direct.
 Environment=HTTPS_PROXY=http://127.0.0.1:__PROXY_PORT__
 Environment=HTTP_PROXY=http://127.0.0.1:__PROXY_PORT__

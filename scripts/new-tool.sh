@@ -74,6 +74,7 @@ MCP_ALLOWED_GOOGLE_EMAILS=
 ENV
 
 sed -e "s|__NAME__|${UNIT_NAME}|g" \
+    -e "s|__TOOL__|${NAME}|g" \
     -e "s|__PORT__|${PORT}|g" \
     -e "s|__DIR__|${DIR}|g" \
     -e "s|__PROXY_PORT__|${PROXY_PORT}|g" \

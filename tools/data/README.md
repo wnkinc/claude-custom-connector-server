@@ -103,7 +103,15 @@ lines for `:8074`, `sudo scripts/install-system.sh`, then
 
 ## Egress
 
-yfinance reaches Yahoo Finance over HTTPS; under the L2 egress wall those hosts must be
-in `security/egress-proxy/allowlist/data.txt` (`.finance.yahoo.com`, `fc.yahoo.com`)
-or downloads fail closed. Discover any misses from `TCP_DENIED` in
-`/var/log/squid/access.log`.
+Under the L2 egress wall a tool can only reach hosts in its allowlist
+(`security/egress-proxy/allowlist/data.txt`), so that file holds **two** host groups:
+
+- **Yahoo Finance** — yfinance's download + cookie/crumb endpoints
+  (`.finance.yahoo.com`, `query1`/`query2.finance.yahoo.com`, `fc.yahoo.com`).
+- **Google OAuth** — `accounts.google.com`, `oauth2.googleapis.com`,
+  `www.googleapis.com`, `openidconnect.googleapis.com`. These are here because, with
+  `MCP_AUTH_ENABLED=1`, the server verifies Google tokens and fetches JWKS
+  **server-side** — those calls go out through the same egress proxy, so if the hosts
+  are missing, *login itself* fails closed, not just data fetches.
+
+Discover any misses from `TCP_DENIED` in `/var/log/squid/access.log`.
