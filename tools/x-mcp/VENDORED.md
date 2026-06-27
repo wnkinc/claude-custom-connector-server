@@ -48,8 +48,9 @@ Everything beyond `from_openapi` is ours:
 - **Shared platform wiring** (not xmcp-specific — see central docs):
   - `GuardrailMiddleware` screens every tool result before it reaches the model — see
     [`security/guardrail`](../../security/guardrail).
-  - Google-OAuth public serving via `shared.auth.build_oauth_provider` (toggled by
-    `MCP_AUTH_ENABLED`) — see [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md).
+  - Composition + serving via `security.serve.serve` (applies OAuth, plus the
+    approval gate and guardrail screening this tool opts into) — see
+    [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md).
 
 > **Gotcha:** `main()` reads `MCP_PORT` from the process env **before** `.env` is
 > loaded, so it's set in the systemd unit's `Environment=`, not `.env`.

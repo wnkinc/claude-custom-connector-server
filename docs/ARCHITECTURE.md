@@ -57,7 +57,7 @@ api.x.com (read-only bearer, allowlisted ops) + api.x.ai (grok_x_search) + Googl
   dropped, while `api.x.com`/`api.x.ai` succeed through the proxy.
 
 - **Google OAuth with a verified-email allowlist, fail-closed.** `GoogleProvider`
-  authenticates *any* Google account; `shared/auth.py` (`GoogleAllowlistProvider`)
+  authenticates *any* Google account; `security/auth.py` (`GoogleAllowlistProvider`)
   wraps its token verifier to reject any login whose verified email is not in
   `MCP_ALLOWED_GOOGLE_EMAILS`, and refuses to start if auth is enabled without an
   allowlist/credentials. Bonus native gate: while the Google consent screen is in
@@ -66,6 +66,6 @@ api.x.com (read-only bearer, allowlisted ops) + api.x.ai (grok_x_search) + Googl
 ## Adding a tool
 
 `scripts/new-tool.sh <name> <port> [subdomain]` stamps `tools/<name>/` (server
-stub pre-wired to `shared/auth.py`, env.example, hardened unit). Then enable the
+stub pre-wired to `security/serve.py`, env.example, hardened unit). Then enable the
 unit, `scripts/add-tunnel-route.sh`, add one redirect URI to the shared Google
 OAuth client, and add the custom connector in Claude.

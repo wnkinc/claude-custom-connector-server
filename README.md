@@ -8,9 +8,10 @@ Tunnel, with each tool gated by Google OAuth (verified-email allowlist).
 
 ```
 mcp-tools/
-  shared/                # generic plumbing imported by every tool server
+  security/              # shared plumbing + threat-model layers (imported by every tool)
     auth.py              #   Google OAuth provider (email allowlist, fail-closed)
-  security/              # threat-model security layers
+    serve.py             #   serve(mcp, ...): applies the layers below + runs the server
+    approval/            #   out-of-band human-in-the-loop approval gate (middleware + routes)
     egress-proxy/        #   L2: loopback squid allowlist proxy every tool is forced through
     guardrail/
       middleware.py      #   L4 detect: FastMCP middleware that screens tool output
