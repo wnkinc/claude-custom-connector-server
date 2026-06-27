@@ -63,17 +63,6 @@ api.x.com (read-only bearer, allowlisted ops) + api.x.ai (grok_x_search) + Googl
   allowlist/credentials. Bonus native gate: while the Google consent screen is in
   "Testing" status, only added test-user emails can complete the upstream login.
 
-## Two instances of x-mcp (intentional)
-
-| Instance | Location | Port | Auth | Consumer |
-|---|---|---|---|---|
-| loopback | `secure-agentic-engineering/tools/x-mcp` | `:8051` | none | DeerFlow (local) |
-| **public** | `mcp-tools/tools/x-mcp` (this repo) | `:8061` | Google OAuth | Claude desktop/web/mobile |
-
-Same code, different env. The DeerFlow instance is left untouched. `server.py`'s
-`MCP_AUTH_ENABLED` flag toggles between the two modes, so the two deployments can
-be **consolidated later** (one code home, two units) without a rewrite.
-
 ## Adding a tool
 
 `scripts/new-tool.sh <name> <port> [subdomain]` stamps `tools/<name>/` (server
