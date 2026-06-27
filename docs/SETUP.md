@@ -33,9 +33,9 @@ redirect URI here.)
 ## 2. Fill secrets  (you)
 
 ```bash
-cp tools/x-mcp/env.example tools/x-mcp/.env   # .env is gitignored
+cp tools/xmcp/env.example tools/xmcp/.env   # .env is gitignored
 ```
-Edit `tools/x-mcp/.env`:
+Edit `tools/xmcp/.env`:
 - `X_BEARER_TOKEN=` — your X app bearer (read-only).
 - `X_API_TOOL_ALLOWLIST=` — e.g. `getUsersByUsername,searchPostsRecent,getUsersPosts`.
 - `XAI_API_KEY=` — only if you want the `grok_x_search` tool.
@@ -46,8 +46,8 @@ Edit `tools/x-mcp/.env`:
 
 Create the venv + install deps (if not already done):
 ```bash
-uv venv tools/x-mcp/.venv
-uv pip install --python tools/x-mcp/.venv/bin/python -r tools/x-mcp/requirements.txt
+uv venv tools/xmcp/.venv
+uv pip install --python tools/xmcp/.venv/bin/python -r tools/xmcp/requirements.txt
 ```
 
 ## 3. Install + start the service (one-time bootstrap)

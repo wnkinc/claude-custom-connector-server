@@ -12,7 +12,7 @@ Wants=network-online.target
 Type=simple
 User=wes
 Group=wes
-WorkingDirectory=/home/wes/Documents/mcp-tools/tools/x-mcp
+WorkingDirectory=/home/wes/Documents/mcp-tools/tools/xmcp
 # MCP_PORT is read by main() BEFORE .env loads, so it MUST live here, not in .env.
 Environment=MCP_HOST=127.0.0.1
 Environment=MCP_PORT=8061
@@ -36,7 +36,7 @@ Environment=NO_PROXY=127.0.0.1,localhost
 IPAddressDeny=any
 IPAddressAllow=127.0.0.1/8
 
-ExecStart=/home/wes/Documents/mcp-tools/tools/x-mcp/.venv/bin/python server.py
+ExecStart=/home/wes/Documents/mcp-tools/tools/xmcp/.venv/bin/python server.py
 Restart=on-failure
 RestartSec=5
 

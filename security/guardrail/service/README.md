@@ -58,5 +58,5 @@ journalctl --user -u guardrail-service.service -f   # logs (PromptGuard load, sc
 
 - **x-mcp** — `security/guardrail/middleware.py::GuardrailMiddleware` POSTs every X
   tool result to `/scan` and withholds it on `block`/HITL (fails closed if this
-  service is down). See `tools/x-mcp` (`GUARDRAIL_URL`, `GUARDRAIL_ENABLED`).
+  service is down). See `tools/xmcp` (`GUARDRAIL_URL`, `GUARDRAIL_ENABLED`).
 - Future untrusted-content tools wire in the same middleware.

@@ -18,7 +18,7 @@ mcp-tools/
       service/           #   standalone LlamaFirewall scan service (loopback :8071)
     eval/                #   garak red-team harness
   tools/                 # one hardened system unit per tool (own loopback port + subdomain)
-    x-mcp/               # X (Twitter) read-only search/lookup + Grok x_search (:8061)
+    xmcp/                # X (Twitter) read-only search/lookup + Grok x_search (:8061)
       server.py          #   our FastMCP server on fastmcp.from_openapi (read-only X) + grok_x_search
       systemd/mcp-xmcp.service
       env.example

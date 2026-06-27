@@ -53,7 +53,7 @@ def _strip_local_output_schemas(mcp) -> None:  # type: ignore[no-untyped-def]
     SCOPE: reaches the ``LocalProvider`` registry (decorator + add_tool tools). Tools
     built by ``FastMCP.from_openapi`` live in a separate, dynamically-generated provider
     this can't touch -- those are stripped at BUILD time via
-    ``from_openapi(mcp_component_fn=...)`` (see tools/x-mcp/server.py). Reaches a
+    ``from_openapi(mcp_component_fn=...)`` (see tools/xmcp/server.py). Reaches a
     FastMCP-3.4.2 internal; pinned deps keep it stable, and it no-ops if that internal
     shape changes.
     """
