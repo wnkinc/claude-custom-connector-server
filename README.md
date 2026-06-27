@@ -11,11 +11,13 @@ mcp-tools/
   shared/                # generic plumbing imported by every tool server
     auth.py              #   Google OAuth provider (email allowlist, fail-closed)
   security/              # threat-model security layers
+    egress-proxy/        #   L2: loopback squid allowlist proxy every tool is forced through
     guardrail/
       middleware.py      #   L4 detect: FastMCP middleware that screens tool output
       service/           #   standalone LlamaFirewall scan service (loopback :8071)
-  tools/
-    x-mcp/               # first tool: X (Twitter) read-only search/lookup + Grok x_search
+    eval/                #   garak red-team harness
+  tools/                 # one hardened system unit per tool (own loopback port + subdomain)
+    x-mcp/               # X (Twitter) read-only search/lookup + Grok x_search (:8061)
       server.py          #   vendored+patched FastMCP server (see VENDORED.md) + OAuth wiring
       systemd/mcp-xmcp.service
       env.example
@@ -23,11 +25,17 @@ mcp-tools/
       server.py          #   FastMCP server (OAuth) + in-process run registry
       pipeline.py        #   deterministic fetch → normalize → enforce → store
       systemd/mcp-data.service
+    hamilton/            # research library: catalog of reusable indicators/signals (:8064)
+      server.py          #   FastMCP server (OAuth) + catalog
+      systemd/mcp-hamilton.service
   scripts/
+    install-system.sh    # one-time ROOT bootstrap (squid + system units + sudoers)
     new-tool.sh          # stamp a new tool (dir + server stub + unit)
     add-tunnel-route.sh  # add Cloudflare ingress + DNS for a tool
+    system/
+      mcp-tools.sudoers  # scoped passwordless sudoers (restart units without a password)
     templates/
-      unit.template      # hardened --user service template (used by new-tool.sh)
+      unit.template      # hardened system-unit template (used by new-tool.sh)
   docs/
     SETUP.md             # step-by-step runbook (start here)
     ARCHITECTURE.md      # how it fits together + why it's built this way
@@ -40,9 +48,11 @@ subdomain** routed by a single **Cloudflare Tunnel** (transport only — no Acce
 policy). **Auth lives in the MCP server** (FastMCP Google OAuth), not in
 Cloudflare, because that is the only way the claude.ai **web/mobile** custom
 connectors work (see [docs/SETUP.md](docs/SETUP.md) for the Cloudflare-Access
-bug this avoids). Each tool is added to Claude as a **custom connector** (no
-directory review).
+bug this avoids). All outbound traffic is forced through a **loopback egress
+allowlist proxy** (the kernel drops anything else), so a bad dep can't exfiltrate.
+Each tool is added to Claude as a **custom connector** (no directory review).
 
 ## Quick start
 
-See **[docs/SETUP.md](docs/SETUP.md)**. New tool later: `scripts/new-tool.sh`.
+See **[docs/SETUP.md](docs/SETUP.md)** (one-time bootstrap: `sudo
+scripts/install-system.sh`). New tool later: `scripts/new-tool.sh`.
