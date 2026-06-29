@@ -68,8 +68,11 @@ def equity_ingest(
     (fetch 2024 today, 2023 tomorrow, keep both). ``interval`` is OpenBB's bar size (1m,
     2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1W, 1M, 1Q; default 1d). ``start``/``end`` are
     ISO dates (YYYY-MM-DD); omit both for the provider's default window (yfinance: ~1y).
-    ``source`` is the OpenBB provider: "yfinance" (default, no key) or "tiingo" (needs
-    TIINGO_API_KEY). Pass ``refresh=true`` to replace the stored file instead of merging.
+    ``source`` is the OpenBB provider — CHOOSE BY HISTORY DEPTH: use "yfinance" (default,
+    free) for daily/weekly/monthly bars, or intraday within roughly the last 30 days. Use
+    "tiingo" (needs TIINGO_API_KEY) for intraday bars (1m–1h) older than ~30 days: yfinance
+    only retains ~30 days of intraday history and returns nothing beyond it, whereas tiingo
+    has years. Pass ``refresh=true`` to replace the stored file instead of merging.
     """
     symbol = (symbol or "").strip().upper()
     df = feeds.equity_bars(symbol, interval, start, end, source)
@@ -91,6 +94,9 @@ def crypto_ingest(
     Same behavior as equity-ingest but for a crypto pair ``symbol`` (e.g. "BTC-USD",
     "ETH-USD"): merges into the stored file de-duplicated on timestamp, accumulating
     history across calls. ``interval``/``start``/``end``/``refresh`` work identically.
+    ``source`` follows the same rule — CHOOSE BY HISTORY DEPTH: "yfinance" (default, free)
+    for daily bars or intraday within ~the last 30 days; "tiingo" (needs TIINGO_API_KEY)
+    for intraday bars (1m–1h) older than ~30 days, which yfinance cannot serve.
     """
     symbol = (symbol or "").strip().upper()
     df = feeds.crypto_bars(symbol, interval, start, end, source)
