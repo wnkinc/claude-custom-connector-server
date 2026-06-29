@@ -1,76 +1,70 @@
-# data — market data via OpenBB into a DuckDB parquet lake
+# data — market data via OpenBB, persisted to a parquet lake
 
-A self-hosted MCP server for market data. **Bars** are fetched through
-[OpenBB](https://openbb.co) (yfinance provider) and ingested into a **canonical,
-engine-agnostic parquet data lake** managed by **DuckDB**, so repeat ranges hit cache.
-A set of **live `equity-*` tools** expose the rest of OpenBB's equity surface
-(quote, fundamentals, profile, estimates, ownership, discovery) as read-through
-passthroughs. Exposed to the Claude apps over the standard mcp-tools security spine.
+A self-hosted MCP server for market data, built as a thin read-through over
+[OpenBB](https://openbb.co) (yfinance provider). **Bars** are fetched and *persisted*
+to a plain parquet lake — each ingest merges into the symbol's file (de-duplicated on
+timestamp), so a download is kept and accumulates across calls. A set of **live
+`equity-*` tools** expose the rest of OpenBB's equity surface (quote, fundamentals,
+profile, estimates, ownership, discovery) as pure passthroughs. Exposed to the Claude
+apps over the standard mcp-tools security spine.
 
 ```
 Claude app ──HTTPS──► Cloudflare Tunnel ──► this server (loopback :8062, OAuth-gated)
                                                   │
                           ┌───────────────────────┴───────────────────────┐
                           ▼                                                 ▼
-            bars: OpenBB (yfinance) ──► enforce_canonical ──► DuckDB    equity-*: OpenBB
-                          │                                   parquet    (live, not cached)
-                          ▼                                   lake
+            bars: OpenBB (yfinance) ──► parquet (merge + dedupe)    equity-*: OpenBB
+                          │                                          (live, not persisted)
+                          ▼
             <DATA_ROOT>/bars/yfinance/<SYMBOL>/<interval>.parquet
-            <DATA_ROOT>/_catalog.duckdb   (cache coverage bookkeeping)
 ```
 
-## What changed (OpenBB + DuckDB rewrite)
+## Design
 
-The earlier port hand-rolled a yfinance download (`sources/yfinance.py`), a normalizer
-(`normalize.py`), and a pyarrow parquet reader/writer (`store.py`). Those are gone:
+OpenBB does the fetch *and* the normalization — its standardized model returns
+canonical-named OHLCV, so there is no hand-rolled downloader, normalizer, or canonical
+re-clean. Commands and providers are *separate* extensions: `openbb-equity` (the
+`equity.*` commands) + `openbb-yfinance` (the data). Add a source = another provider
+extension; add a data type = another command extension.
 
-- **OpenBB** replaces fetch + normalize — its standardized model already returns
-  canonical-named OHLCV. Commands and providers are *separate* extensions: `openbb-equity`
-  (the `equity.*` commands) + `openbb-yfinance` (the data). Add a source = another provider
-  extension; add a data type = another command extension.
-- **DuckDB** replaces the parquet I/O and holds the cache catalog. Bars files stay plain,
-  engine-agnostic parquet; only the cache bookkeeping lives in DuckDB.
+Persistence is just pandas + parquet (via pyarrow) — no separate store engine, no cache
+catalog. Bars are written with `DataFrame.to_parquet`; a re-ingest reads the existing
+file, concatenates, and drops duplicate timestamps (the freshly fetched bar wins, so
+corrections and late volume overwrite the stored value). OpenBB's frame is persisted
+**as-is** — its own schema, its own `date` index.
 
-What stays custom (and should): the MCP/OAuth surface (`server.py`), the async run
-registry (`runs.py`), the canonical contract (`schema.py`), and the cache *policy*
-(requested-window subset; DuckDB stores it, our code decides it).
+What stays custom (and should): the MCP/OAuth surface (`server.py`) and the thin
+fetch-merge-persist glue (`bars.py`).
 
 ## The store
 
-Plain parquet, readable by any pandas/pyarrow/duckdb consumer. Self-describing layout
-(the path is the metadata); a tiny DuckDB file alongside holds cache coverage:
+Plain parquet, readable by any pandas/pyarrow/duckdb consumer. Self-describing layout —
+the path is the metadata:
 
 ```
-<DATA_ROOT>/<kind>/<source>/<symbol>/<interval>.parquet   e.g. var/data/bars/yfinance/AAPL/1d.parquet
-<DATA_ROOT>/_catalog.duckdb                                 coverage(kind,source,symbol,interval → req_start,req_end,fetched_at)
+<DATA_ROOT>/bars/<source>/<symbol>/<interval>.parquet   e.g. var/data/bars/yfinance/AAPL/1d.parquet
 ```
 
-Canonical bars schema: `timestamp` (UTC), `open`, `high`, `low`, `close`, `volume`.
+Each `data-ingest` fetches the requested window and **merges** it into that file,
+de-duplicated on the timestamp index, so the file accumulates history across calls
+(fetch 2024 today, 2023 tomorrow — the file holds both). `refresh=true` replaces the
+file with just the new fetch instead of merging. There is no cache short-circuit: an
+ingest always hits OpenBB, then folds the result into what's stored.
 
-A request whose range is already stored returns a **cache hit** without re-downloading
-(`refresh=true` forces a re-fetch). Coverage compares *requested* windows (recorded in
-the catalog), so holidays/weekends and a provider's exclusive `end` don't defeat the cache.
-
-## Code layout (separated by lifecycle stage)
+## Code layout
 
 | File | Role |
 |---|---|
-| `schema.py` | canonical contract + `enforce_canonical`; the `kinds` vocabulary |
-| `sources/openbb_source.py` | fetch canonical-named bars via OpenBB (interval map + full-history anchor) |
-| `store.py` | the only reader/writer — DuckDB parquet I/O + the cache catalog |
-| `pipeline.py` | the deterministic bars ingest (fetch → enforce → store) |
-| `runs.py` | in-process run registry + thread pool (slow runs return a PENDING run_id) |
-| `equity.py` | live (non-cached) OpenBB equity passthroughs |
+| `bars.py` | fetch bars via OpenBB + persist to parquet (merge/dedupe/append); read back |
+| `equity.py` | live (non-persisted) OpenBB equity passthroughs |
 | `server.py` | FastMCP server: OAuth wiring + the MCP tools |
 
 ## MCP tools
 
-| Tool | Purpose | Cached? |
+| Tool | Purpose | Persisted? |
 |---|---|---|
-| `data-ingest` | start a bars ingest → summary, or a `PENDING` run_id for a slow run | lake |
-| `data-ingest-poll` | retrieve a slow run's summary by run_id | — |
-| `data-ingest-cancel` | best-effort cancel a run | — |
-| `data-read` | read canonical bars back out of the lake (read-only) | lake |
+| `data-ingest` | fetch bars and merge them into the parquet lake → summary | lake |
+| `data-read` | read stored bars back out of the lake (read-only) | lake |
 | `equity-quote` | latest quote (price, bid/ask, day range, market cap) | live |
 | `equity-fundamentals` | income / balance / cash / metrics / dividends | live |
 | `equity-profile` | company profile (name, exchange, sector, identifiers) | live |
@@ -78,8 +72,9 @@ the catalog), so holidays/weekends and a provider's exclusive `end` don't defeat
 | `equity-ownership` | shares outstanding / float / short interest | live |
 | `equity-discovery` | market screens (gainers/losers/active/…) | live |
 
-`data-ingest` args: `symbol`, `interval?="1d"` (1m/5m/15m/30m/1h/1d/1wk/1mo),
-`start?`/`end?` (ISO `YYYY-MM-DD`; omit both = full history), `source?="yfinance"`,
+`data-ingest` args: `symbol`, `interval?="1d"` (OpenBB's vocabulary:
+`1m/2m/5m/15m/30m/60m/90m/1h/1d/5d/1W/1M/1Q`), `start?`/`end?` (ISO `YYYY-MM-DD`; omit
+both = the provider's default window, ~1y for yfinance), `source?="yfinance"`,
 `refresh?=false`.
 
 ## Setup & run
@@ -112,8 +107,6 @@ lines for `:8074`, `sudo scripts/install-system.sh`, then
 | `OPENBB_AUTO_BUILD` | `false` (unit) | freeze the prebuilt accessor; never rebuild at import |
 | `HOME` | StateDirectory (unit) | OpenBB derives `$HOME/.openbb_platform` from this; must be writable |
 | `DATA_ROOT` | `<tool>/var/data` | data-lake root (set to the StateDirectory on the unit) |
-| `DATA_MAX_WORKERS` | `4` | ingest thread-pool size |
-| `DATA_INLINE_BUDGET_S` | `20` | seconds `data-ingest` blocks before returning a `PENDING` run_id |
 
 ## Egress
 

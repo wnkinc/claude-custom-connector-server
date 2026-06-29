@@ -1,28 +1,19 @@
-"""MCP server: market-data ingest into a canonical parquet data lake.
+"""MCP server: market-data tools over OpenBB (yfinance provider).
 
-A port of the ``secure-agentic-engineering`` data-ingest pattern into mcp-tools.
-There it was a thin httpx MCP bridge fronting a separate FastAPI runner service;
-here — where every tool is already its own hardened, single-venv process — the
-runner collapses *into* this server (see ``runs.py``). The deterministic pipeline
-(``pipeline.py``: fetch → normalize → enforce_canonical → store) and the canonical
-contract (``schema.py``) port over unchanged.
+Every tool is a thin read-through over OpenBB. Bars are additionally *persisted* to a
+plain parquet lake (``bars.py``) so a download is kept and accumulates across calls;
+the ``equity-*`` tools are pure live passthroughs. All return structured market data,
+hence trusted output (no guardrail).
 
 Tools exposed:
-  data-ingest        — start a bars ingest; returns the summary, or a PENDING run_id
-  data-ingest-poll   — retrieve a slow run's summary by run_id
-  data-ingest-cancel — best-effort cancel a run
-  data-read          — read canonical bars back out of the lake (cached)
+  data-ingest        — fetch bars and merge them into the parquet lake
+  data-read          — read stored bars back out of the lake
   equity-quote       — latest quote (live)
   equity-fundamentals— income/balance/cash/metrics/dividends (live)
   equity-profile     — company profile (live)
   equity-estimates   — analyst price-target consensus (live)
   equity-ownership   — share statistics / float / short interest (live)
   equity-discovery   — market screens (gainers/losers/active/…) (live)
-
-Bars are fetched via OpenBB (yfinance provider) and ingested into a DuckDB-managed
-parquet lake (``store.py``) so repeat ranges hit cache. The ``equity-*`` tools are
-live read-through passthroughs over OpenBB — structured market data, hence trusted
-output (no guardrail).
 """
 import os
 import sys
@@ -35,11 +26,8 @@ from fastmcp import FastMCP
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from security.serve import serve  # noqa: E402
 
+import bars  # noqa: E402
 import equity  # noqa: E402
-import pipeline  # noqa: E402
-import runs  # noqa: E402
-import store  # noqa: E402
-from schema import KIND_BARS  # noqa: E402
 
 mcp = FastMCP(name="data")
 
@@ -56,37 +44,12 @@ def load_env() -> None:
 
 
 def _summary_line(s: dict) -> str:
-    where = "cache hit (already stored)" if s.get("cached") else "fetched"
     return (
-        f"Ingested {s.get('rows')} {s.get('interval')} bars for "
-        f"{s.get('symbol')} ({s.get('source')}): "
-        f"{s.get('start')} → {s.get('end')} [{where}].\n"
+        f"Ingested {s.get('symbol')} {s.get('interval')} bars ({s.get('source')}): "
+        f"fetched {s.get('fetched')}, +{s.get('added')} new "
+        f"→ {s.get('rows')} stored ({s.get('start')} → {s.get('end')}).\n"
         f"Stored at {s.get('path')}"
     )
-
-
-def _pending_line(run_id: str) -> str:
-    return (
-        f"PENDING: data ingest is still running (run_id={run_id}).\n"
-        f'Call the data-ingest-poll tool with run_id="{run_id}" to retrieve the summary '
-        f"once it is ready. Do NOT call data-ingest again for this task — that starts a "
-        f"new ingest. Use data-ingest-cancel with the same run_id to stop it."
-    )
-
-
-def _report(run_id: str) -> str:
-    """Turn a run's terminal/pending state into a model-facing message."""
-    st = runs.wait(run_id)
-    if st == runs.RUNNING:
-        return _pending_line(run_id)
-    job = runs.result(run_id)
-    if job is None:
-        return f"ERROR: data ingest run {run_id} was not found (it may have been lost)."
-    if st == runs.SUCCESS and job.result:
-        return _summary_line(job.result)
-    if st == runs.INTERRUPTED:
-        return f"Data ingest run {run_id} was cancelled (interrupted)."
-    return f"ERROR: data ingest run {run_id}: {job.error or 'unknown error'}"
 
 
 @mcp.tool(name="data-ingest")
@@ -99,48 +62,17 @@ def data_ingest(
     refresh: bool = False,
 ) -> str:
     """
-    Fetch market data and store it in the local canonical data lake.
+    Fetch market data from Yahoo Finance and persist it to the local parquet lake.
 
-    Runs a deterministic fetch → clean → store pipeline for one ``symbol`` (e.g.
-    "AAPL", "BTC-USD") from Yahoo Finance, saving canonical OHLCV bars as parquet.
-    ``interval`` is the bar size (1m, 5m, 15m, 30m, 1h, 1d, 1wk, 1mo; default 1d).
-    ``start``/``end`` are ISO dates (YYYY-MM-DD); omit both to fetch full history.
-    If the requested range is already stored it returns a cache hit without
-    re-downloading — pass ``refresh=true`` to force a re-fetch.
-
-    Fast runs return the summary directly. Long runs return a "PENDING" marker with a
-    run_id — call the data-ingest-poll tool with that run_id to retrieve the summary.
+    Fetches OHLCV bars for one ``symbol`` (e.g. "AAPL", "BTC-USD") and merges them into
+    the symbol's stored parquet file, de-duplicating on timestamp — so the file
+    accumulates history across calls (fetch 2024 today, 2023 tomorrow, keep both).
+    ``interval`` is OpenBB's bar size (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1W,
+    1M, 1Q; default 1d). ``start``/``end`` are ISO dates (YYYY-MM-DD); omit both for the
+    provider's default window (yfinance: ~1y). Pass ``refresh=true`` to replace the
+    stored file with just this fetch instead of merging.
     """
-    run_id = runs.start(symbol, interval, start, end, source, refresh)
-    return _report(run_id)
-
-
-@mcp.tool(name="data-ingest-poll")
-def data_ingest_poll(run_id: str) -> str:
-    """
-    Retrieve the result of a long-running data ingest started by data-ingest.
-
-    Returns the ingest summary when the run has finished, or another "PENDING" marker
-    if it is still working — in which case call data-ingest-poll again with the same run_id.
-    """
-    return _report(run_id)
-
-
-@mcp.tool(name="data-ingest-cancel")
-def data_ingest_cancel(run_id: str) -> str:
-    """
-    Cancel an in-progress data ingest started by data-ingest.
-
-    Use the run_id from a PENDING marker. No-op-safe if the run has already finished.
-    """
-    hard, st = runs.cancel(run_id)
-    if st is None:
-        return f"Run {run_id} not found (it may have already finished)."
-    if hard:
-        return f"Cancelled data ingest run {run_id}."
-    if st in runs.TERMINAL:
-        return f"Run {run_id} could not be cancelled (already {st})."
-    return f"Cancel requested for run {run_id}; it will stop after the current download returns."
+    return _summary_line(bars.ingest(symbol, interval, start, end, source, refresh))
 
 
 @mcp.tool(name="data-read")
@@ -151,26 +83,26 @@ def data_read(
     tail: int = 10,
 ) -> str:
     """
-    Read canonical bars back out of the data lake (ingest them first with data-ingest).
+    Read stored bars back out of the parquet lake (ingest them first with data-ingest).
 
     Returns the last ``tail`` rows (default 10) of stored OHLCV bars for
     ``symbol``/``interval``/``source`` as text, plus the total row count and the
     stored file path. Reads only — never fetches.
     """
     symbol = (symbol or "").strip().upper()
-    df = store.read(KIND_BARS, source, symbol, interval)
+    df = bars.read(symbol, interval, source)
     if df is None or df.empty:
         return (
             f"No stored bars for {symbol} {interval} ({source}). "
             f"Run data-ingest first."
         )
-    path = store.path_for(KIND_BARS, source, symbol, interval)
+    path = bars.path_for(source, symbol, interval)
     n = max(0, int(tail))
     view = df.tail(n) if n else df
     return (
         f"{len(df)} {interval} bars for {symbol} ({source}); showing last {len(view)}.\n"
         f"Stored at {path}\n\n"
-        f"{view.to_string(index=False)}"
+        f"{view.to_string()}"
     )
 
 
