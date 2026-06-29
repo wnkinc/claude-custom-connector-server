@@ -114,8 +114,8 @@ def test_equity_bars_calls_equity_endpoint(monkeypatch):
     assert out is df
     assert cr == {}  # crypto endpoint untouched
     assert eq == {
-        "symbol": "AAPL", "interval": "1d",
-        "start_date": "2024-01-01", "end_date": "2024-01-10", "provider": "yfinance",
+        "symbol": "AAPL", "interval": "1d", "start_date": "2024-01-01",
+        "end_date": "2024-01-10", "provider": "tiingo",  # the fixed default provider
     }
 
 

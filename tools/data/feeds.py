@@ -21,7 +21,10 @@ import os
 
 import pandas as pd
 
-DEFAULT_PROVIDER = "yfinance"
+# Tiingo is the fixed provider for equity + crypto (deeper intraday history than yfinance,
+# same daily) — the tools don't expose a provider choice. yfinance stays installed and
+# reachable in code via provider="yfinance", but nothing uses it by default.
+DEFAULT_PROVIDER = "tiingo"
 
 # env var -> the obb.user.credentials attribute it populates. Add a keyed provider here.
 _CREDENTIALS = {"TIINGO_API_KEY": "tiingo_token"}

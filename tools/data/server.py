@@ -9,6 +9,8 @@ A capability tool just wires feed → lake → text. Adding one (another OpenBB 
 is a ``feeds`` fn + a tool here; ``lake.py`` never changes. All tools return trusted,
 structured market data (no guardrail).
 
+Equity + crypto are fetched from Tiingo (fixed provider — no source choice; see feeds.py).
+
 Tools exposed:
   equity-ingest — fetch equity OHLCV bars and merge them into the lake
   crypto-ingest — fetch crypto OHLCV bars and merge them into the lake
@@ -57,26 +59,21 @@ def equity_ingest(
     interval: str = "1d",
     start: str | None = None,
     end: str | None = None,
-    source: str = "yfinance",
     refresh: bool = False,
 ) -> str:
     """
-    Fetch equity OHLCV bars from Yahoo Finance and persist them to the parquet lake.
+    Fetch equity OHLCV bars from Tiingo and persist them to the parquet lake.
 
     Fetches bars for one equity ``symbol`` (e.g. "AAPL") and merges them into the stored
     file, de-duplicated on timestamp — so the file accumulates history across calls
     (fetch 2024 today, 2023 tomorrow, keep both). ``interval`` is OpenBB's bar size (1m,
     2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1W, 1M, 1Q; default 1d). ``start``/``end`` are
-    ISO dates (YYYY-MM-DD); omit both for the provider's default window (yfinance: ~1y).
-    ``source`` is the OpenBB provider — CHOOSE BY HISTORY DEPTH: use "yfinance" (default,
-    free) for daily/weekly/monthly bars, or intraday within roughly the last 30 days. Use
-    "tiingo" (needs TIINGO_API_KEY) for intraday bars (1m–1h) older than ~30 days: yfinance
-    only retains ~30 days of intraday history and returns nothing beyond it, whereas tiingo
-    has years. Pass ``refresh=true`` to replace the stored file instead of merging.
+    ISO dates (YYYY-MM-DD), and Tiingo serves deep intraday history (years of 1m bars).
+    Pass ``refresh=true`` to replace the stored file instead of merging.
     """
     symbol = (symbol or "").strip().upper()
-    df = feeds.equity_bars(symbol, interval, start, end, source)
-    return _fmt(lake.ingest(("equity", source, symbol, interval), df, refresh=refresh))
+    df = feeds.equity_bars(symbol, interval, start, end)
+    return _fmt(lake.ingest(("equity", feeds.DEFAULT_PROVIDER, symbol, interval), df, refresh=refresh))
 
 
 @mcp.tool(name="crypto-ingest")
@@ -85,22 +82,19 @@ def crypto_ingest(
     interval: str = "1d",
     start: str | None = None,
     end: str | None = None,
-    source: str = "yfinance",
     refresh: bool = False,
 ) -> str:
     """
-    Fetch crypto OHLCV bars from Yahoo Finance and persist them to the parquet lake.
+    Fetch crypto OHLCV bars from Tiingo and persist them to the parquet lake.
 
-    Same behavior as equity-ingest but for a crypto pair ``symbol`` (e.g. "BTC-USD",
-    "ETH-USD"): merges into the stored file de-duplicated on timestamp, accumulating
-    history across calls. ``interval``/``start``/``end``/``refresh`` work identically.
-    ``source`` follows the same rule — CHOOSE BY HISTORY DEPTH: "yfinance" (default, free)
-    for daily bars or intraday within ~the last 30 days; "tiingo" (needs TIINGO_API_KEY)
-    for intraday bars (1m–1h) older than ~30 days, which yfinance cannot serve.
+    Same behavior as equity-ingest but for a crypto pair ``symbol`` — note Tiingo's symbol
+    format is hyphen-less (e.g. "BTCUSD", "ETHUSD", not "BTC-USD"). Merges into the stored
+    file de-duplicated on timestamp, accumulating history across calls.
+    ``interval``/``start``/``end``/``refresh`` work identically.
     """
     symbol = (symbol or "").strip().upper()
-    df = feeds.crypto_bars(symbol, interval, start, end, source)
-    return _fmt(lake.ingest(("crypto", source, symbol, interval), df, refresh=refresh))
+    df = feeds.crypto_bars(symbol, interval, start, end)
+    return _fmt(lake.ingest(("crypto", feeds.DEFAULT_PROVIDER, symbol, interval), df, refresh=refresh))
 
 
 @mcp.tool(name="data-read")
@@ -108,29 +102,29 @@ def data_read(
     asset: str,
     symbol: str,
     interval: str = "1d",
-    source: str = "yfinance",
     tail: int = 10,
 ) -> str:
     """
     Read stored bars back out of the parquet lake (ingest them first).
 
     ``asset`` is the dataset namespace: "equity" or "crypto". Returns the last ``tail``
-    rows (default 10) of stored OHLCV bars for ``asset``/``symbol``/``interval``/``source``
-    as text, plus the total row count and the stored file path. Reads only — never fetches.
+    rows (default 10) of stored OHLCV bars for ``asset``/``symbol``/``interval`` as text,
+    plus the total row count and the stored file path. Reads only — never fetches.
     """
     asset = (asset or "").strip().lower()
     symbol = (symbol or "").strip().upper()
+    source = feeds.DEFAULT_PROVIDER
     df = lake.read(asset, source, symbol, interval)
     if df is None or df.empty:
         return (
-            f"No stored {asset} bars for {symbol} {interval} ({source}). "
+            f"No stored {asset} bars for {symbol} {interval}. "
             f"Run {asset}-ingest first."
         )
     path = lake.path_for(asset, source, symbol, interval)
     n = max(0, int(tail))
     view = df.tail(n) if n else df
     return (
-        f"{len(df)} {interval} {asset} bars for {symbol} ({source}); showing last {len(view)}.\n"
+        f"{len(df)} {interval} {asset} bars for {symbol}; showing last {len(view)}.\n"
         f"Stored at {path}\n\n"
         f"{view.to_string()}"
     )

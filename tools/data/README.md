@@ -1,10 +1,11 @@
 # data — historical market data via OpenBB, persisted to a parquet lake
 
 A self-hosted MCP server for historical market data, built as a thin read-through over
-[OpenBB](https://openbb.co) (yfinance provider). OHLCV **bars** (equity + crypto today)
-are fetched and *persisted* to a plain parquet lake — each ingest merges into the
-symbol's file (de-duplicated on timestamp), so a download is kept and accumulates across
-calls. Exposed to the Claude apps over the standard mcp-tools security spine.
+[OpenBB](https://openbb.co). OHLCV **bars** (equity + crypto today) are fetched from
+**Tiingo** (the fixed provider — deep intraday history; needs `TIINGO_API_KEY`) and
+*persisted* to a plain parquet lake — each ingest merges into the symbol's file
+(de-duplicated on timestamp), so a download is kept and accumulates across calls. Exposed
+to the Claude apps over the standard mcp-tools security spine.
 
 ```
 Claude app ──HTTPS──► Cloudflare Tunnel ──► this server (loopback :8062, OAuth-gated)
@@ -33,12 +34,17 @@ providers are *separate* extensions: each **data type** is a command ext (`openb
 Two kinds of growth, two costs:
 
 - **New data type** = a command ext + a fn in `feeds.py` + a tool in `server.py`.
-- **New source for an existing data type** = just a provider ext — *no new code*. Because
-  OpenBB standardizes across providers, it's used via `source="tiingo"` on the same feed
-  fn. (Keyed providers like tiingo need a token; `feeds._apply_credentials` injects it
-  from the env onto `obb.user.credentials`, since OpenBB doesn't read credential env vars.)
+- **New source for an existing data type** = just a provider ext — *no new code*, because
+  OpenBB standardizes across providers (it's reachable as a `provider=` value on the same
+  feed fn). Keyed providers need a token; `feeds._apply_credentials` injects it from the
+  env onto `obb.user.credentials`, since OpenBB doesn't read credential env vars itself.
 
 `lake.py` is untouched by either.
+
+The provider is **fixed to Tiingo** for equity + crypto (`feeds.DEFAULT_PROVIDER`) — the
+tools expose no source choice, since Tiingo strictly dominates yfinance here (deeper
+intraday, same daily). `openbb-yfinance` stays installed and reachable in code via
+`provider="yfinance"`, but nothing uses it by default.
 
 Persistence is just pandas + parquet (via pyarrow) — no store engine, no cache catalog.
 `lake.ingest` writes with `DataFrame.to_parquet`; a re-ingest reads the existing file,
@@ -69,11 +75,10 @@ then folds the result into what's stored.
 | `crypto-ingest` | fetch crypto OHLCV bars and merge them into the lake → summary |
 | `data-read` | read stored bars back out of the lake (any `asset`; read-only) |
 
-`*-ingest` args: `symbol`, `interval?="1d"` (OpenBB's vocabulary:
-`1m/2m/5m/15m/30m/60m/90m/1h/1d/5d/1W/1M/1Q`), `start?`/`end?` (ISO `YYYY-MM-DD`; omit
-both = the provider's default window, ~1y for yfinance), `source?="yfinance"` (provider:
-`yfinance` or `tiingo`), `refresh?=false`. `data-read` also takes `asset`
-(`equity`|`crypto`) and `tail?=10`.
+`*-ingest` args: `symbol` (Tiingo crypto is hyphen-less, e.g. `BTCUSD`), `interval?="1d"`
+(OpenBB's vocabulary: `1m/2m/5m/15m/30m/60m/90m/1h/1d/5d/1W/1M/1Q`), `start?`/`end?` (ISO
+`YYYY-MM-DD`), `refresh?=false`. No `source` — the provider is fixed to Tiingo.
+`data-read` takes `asset` (`equity`|`crypto`), `symbol`, `interval?="1d"`, `tail?=10`.
 
 ## Setup & run
 
@@ -105,15 +110,16 @@ lines for `:8074`, `sudo scripts/install-system.sh`, then
 | `OPENBB_AUTO_BUILD` | `false` (unit) | freeze the prebuilt accessor; never rebuild at import |
 | `HOME` | StateDirectory (unit) | OpenBB derives `$HOME/.openbb_platform` from this; must be writable |
 | `DATA_ROOT` | `<tool>/var/data` | data-lake root (set to the StateDirectory on the unit) |
-| `TIINGO_API_KEY` | _(empty)_ | required only for `source="tiingo"` (empty = tiingo disabled) |
+| `TIINGO_API_KEY` | _(empty)_ | **required** — Tiingo is the fixed provider for ingest; empty → ingest fails |
 
 ## Egress
 
 Under the L2 egress wall a tool can only reach hosts in its allowlist
-(`security/egress-proxy/allowlist/data.txt`). The **yfinance** provider hits Yahoo Finance
-(`.finance.yahoo.com`, `query1`/`query2`, `fc.yahoo.com`); the **tiingo** provider adds
-`api.tiingo.com` (only when `source="tiingo"`);
-the **Google OAuth** hosts are there because with `MCP_AUTH_ENABLED=1` the server verifies
+(`security/egress-proxy/allowlist/data.txt`). Equity + crypto ingest go to **Tiingo**, so
+the data host is `api.tiingo.com`; Yahoo Finance (`.finance.yahoo.com`, `query1`/`query2`,
+`fc.yahoo.com`) stays allowlisted because `openbb-yfinance` remains installed and reachable
+in code, though no tool uses it by default.
+The **Google OAuth** hosts are there because with `MCP_AUTH_ENABLED=1` the server verifies
 tokens + fetches JWKS server-side through the same proxy (so a missing host fails *login*
 closed, not just data). OpenBB does no network at import (the accessor is prebuilt and
 frozen); it only reaches out on actual data calls. Discover any misses from `TCP_DENIED`
