@@ -23,8 +23,9 @@ mcp-tools/
       systemd/mcp-xmcp.service
       env.example
     data/                # historical market data via OpenBB, persisted to a parquet lake (:8062)
-      server.py          #   FastMCP server (OAuth) + the MCP tools
-      bars.py            #   fetch bars via OpenBB + persist (merge/dedupe/append)
+      server.py          #   FastMCP server (OAuth) + thin MCP tools (one per capability)
+      feeds.py           #   thin OpenBB fetch fns (equity_bars, crypto_bars)
+      lake.py            #   generic parquet persist/merge/read (kind-agnostic)
       systemd/mcp-data.service
     hamilton/            # research library: catalog of reusable indicators/signals (:8064)
       server.py          #   FastMCP server (OAuth) + catalog

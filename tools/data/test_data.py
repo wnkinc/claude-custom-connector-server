@@ -1,14 +1,17 @@
-"""Tests for the bars persistence layer.
+"""Tests for the persistence (lake) and OpenBB-fetch (feeds) layers.
 
-``bars._fetch`` (the only networked call) is monkeypatched so the parquet
-merge/dedupe/append logic is exercised against an in-process tmp lake without
-hitting Yahoo Finance.
+``lake`` is exercised against an in-process tmp lake (no network). ``feeds`` is tested
+with a fake ``obb`` so the right OpenBB endpoint + args are asserted without hitting
+Yahoo Finance.
 """
+
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
-import bars
+import feeds
+import lake
 
 
 def _frame(dates, close):
@@ -26,79 +29,102 @@ def _frame(dates, close):
     )
 
 
-def _stub_fetch(monkeypatch, frame):
-    monkeypatch.setattr(bars, "_fetch", lambda symbol, interval, start, end, source: frame)
+# ── lake: generic parquet persistence ───────────────────────────────────────
 
 
 def test_path_for_layout(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    p = bars.path_for("yfinance", "AAPL", "1d")
-    assert p == tmp_path / "bars" / "yfinance" / "AAPL" / "1d.parquet"
+    assert lake.path_for("equity", "yfinance", "AAPL", "1d") == (
+        tmp_path / "equity" / "yfinance" / "AAPL" / "1d.parquet"
+    )
 
 
 def test_path_for_safe_symbol(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     # '/' is the one genuinely problematic char on Linux (e.g. "BTC/USD").
-    assert bars.path_for("yfinance", "BTC/USD", "1d").name == "1d.parquet"
-    assert "BTC_USD" in str(bars.path_for("yfinance", "BTC/USD", "1d"))
+    assert "BTC_USD" in str(lake.path_for("crypto", "yfinance", "BTC/USD", "1d"))
 
 
 def test_ingest_persists_and_read_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    _stub_fetch(monkeypatch, _frame(["2024-01-02", "2024-01-03"], [1.5, 2.0]))
-
-    s = bars.ingest("aapl", "1d")
-    assert s["symbol"] == "AAPL"  # uppercased
+    s = lake.ingest(("equity", "yfinance", "AAPL", "1d"), _frame(["2024-01-02", "2024-01-03"], [1.5, 2.0]))
+    assert s["key"] == "equity/yfinance/AAPL/1d"
     assert s["rows"] == 2 and s["fetched"] == 2 and s["added"] == 2
 
-    back = bars.read("AAPL", "1d")
+    back = lake.read("equity", "yfinance", "AAPL", "1d")
     assert list(back["close"]) == [1.5, 2.0]
     assert back.index.name == "date"
 
 
 def test_ingest_merges_dedupes_and_appends(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    key = ("equity", "yfinance", "AAPL", "1d")
 
-    _stub_fetch(monkeypatch, _frame(["2024-01-01", "2024-01-02"], [1.0, 2.0]))
-    bars.ingest("AAPL", "1d")
-
+    lake.ingest(key, _frame(["2024-01-01", "2024-01-02"], [1.0, 2.0]))
     # Re-fetch overlaps 01-02 (corrected close) and adds 01-03.
-    _stub_fetch(monkeypatch, _frame(["2024-01-02", "2024-01-03"], [22.0, 3.0]))
-    s = bars.ingest("AAPL", "1d")
+    s = lake.ingest(key, _frame(["2024-01-02", "2024-01-03"], [22.0, 3.0]))
 
     assert s["fetched"] == 2 and s["added"] == 1 and s["rows"] == 3  # only 01-03 is net-new
-
-    back = bars.read("AAPL", "1d")
+    back = lake.read(*key)
     assert list(back.index.strftime("%Y-%m-%d")) == ["2024-01-01", "2024-01-02", "2024-01-03"]
-    assert back.loc["2024-01-02", "close"] == 22.0  # fetched bar wins the dedupe
+    assert back.loc["2024-01-02", "close"] == 22.0  # fetched row wins the dedupe
 
 
 def test_refresh_replaces_stored_file(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    key = ("crypto", "yfinance", "BTC-USD", "1d")
 
-    _stub_fetch(monkeypatch, _frame(["2024-01-01", "2024-01-02"], [1.0, 2.0]))
-    bars.ingest("AAPL", "1d")
+    lake.ingest(key, _frame(["2024-01-01", "2024-01-02"], [1.0, 2.0]))
+    s = lake.ingest(key, _frame(["2024-06-01"], [9.0]), refresh=True)
 
-    _stub_fetch(monkeypatch, _frame(["2024-06-01"], [9.0]))
-    s = bars.ingest("AAPL", "1d", refresh=True)
-
-    assert s["rows"] == 1 and s["added"] == 1  # old bars gone, not merged
-    assert list(bars.read("AAPL", "1d").index.strftime("%Y-%m-%d")) == ["2024-06-01"]
+    assert s["rows"] == 1 and s["added"] == 1  # old rows gone, not merged
+    assert list(lake.read(*key).index.strftime("%Y-%m-%d")) == ["2024-06-01"]
 
 
 def test_ingest_empty_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    _stub_fetch(monkeypatch, _frame([], []))
     with pytest.raises(ValueError):
-        bars.ingest("AAPL", "1d")
-
-
-def test_ingest_requires_symbol(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    with pytest.raises(ValueError):
-        bars.ingest("   ", "1d")
+        lake.ingest(("equity", "yfinance", "AAPL", "1d"), _frame([], []))
 
 
 def test_read_missing_returns_none(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    assert bars.read("NOPE", "1d") is None
+    assert lake.read("equity", "yfinance", "NOPE", "1d") is None
+
+
+# ── feeds: OpenBB endpoint wrappers (fake obb, no network) ───────────────────
+
+
+def _fake_obb(equity_cap, crypto_cap, df):
+    """A stand-in ``obb`` whose equity/crypto ``price.historical`` record their kwargs."""
+    def endpoint(cap):
+        def historical(**kwargs):
+            cap.update(kwargs)
+            return SimpleNamespace(to_df=lambda: df)
+        return SimpleNamespace(price=SimpleNamespace(historical=historical))
+    return SimpleNamespace(equity=endpoint(equity_cap), crypto=endpoint(crypto_cap))
+
+
+def test_equity_bars_calls_equity_endpoint(monkeypatch):
+    eq, cr = {}, {}
+    df = _frame(["2024-01-02"], [1.0])
+    monkeypatch.setattr(feeds, "_obb", lambda: _fake_obb(eq, cr, df))
+
+    out = feeds.equity_bars("AAPL", "1d", "2024-01-01", "2024-01-10")
+    assert out is df
+    assert cr == {}  # crypto endpoint untouched
+    assert eq == {
+        "symbol": "AAPL", "interval": "1d",
+        "start_date": "2024-01-01", "end_date": "2024-01-10", "provider": "yfinance",
+    }
+
+
+def test_crypto_bars_calls_crypto_endpoint(monkeypatch):
+    eq, cr = {}, {}
+    df = _frame(["2024-01-02"], [1.0])
+    monkeypatch.setattr(feeds, "_obb", lambda: _fake_obb(eq, cr, df))
+
+    out = feeds.crypto_bars("BTC-USD", provider="yfinance")
+    assert out is df
+    assert eq == {}  # equity endpoint untouched
+    assert cr["symbol"] == "BTC-USD" and cr["provider"] == "yfinance"

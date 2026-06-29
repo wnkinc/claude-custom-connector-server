@@ -1,71 +1,71 @@
 # data — historical market data via OpenBB, persisted to a parquet lake
 
 A self-hosted MCP server for historical market data, built as a thin read-through over
-[OpenBB](https://openbb.co) (yfinance provider). **Bars** are fetched and *persisted*
-to a plain parquet lake — each ingest merges into the symbol's file (de-duplicated on
-timestamp), so a download is kept and accumulates across calls. Exposed to the Claude
-apps over the standard mcp-tools security spine.
+[OpenBB](https://openbb.co) (yfinance provider). OHLCV **bars** (equity + crypto today)
+are fetched and *persisted* to a plain parquet lake — each ingest merges into the
+symbol's file (de-duplicated on timestamp), so a download is kept and accumulates across
+calls. Exposed to the Claude apps over the standard mcp-tools security spine.
 
 ```
 Claude app ──HTTPS──► Cloudflare Tunnel ──► this server (loopback :8062, OAuth-gated)
                                                   │
                                                   ▼
-                          bars: OpenBB (yfinance) ──► parquet (merge + dedupe)
+                          feeds: OpenBB (yfinance) ──► lake: parquet (merge + dedupe)
                                                   │
                                                   ▼
-                          <DATA_ROOT>/bars/yfinance/<SYMBOL>/<interval>.parquet
+                          <DATA_ROOT>/<asset>/yfinance/<SYMBOL>/<interval>.parquet
 ```
 
-## Design
+## Design — three layers, one job each
 
-OpenBB does the fetch *and* the normalization — its standardized model returns
-canonical-named OHLCV, so there is no hand-rolled downloader, normalizer, or canonical
-re-clean. Commands and providers are *separate* extensions: `openbb-equity` (the
-`equity.*` commands) + `openbb-yfinance` (the data). Add a source = another provider
-extension; add a data type = another command extension.
+The code is split so your *owned* surface stays constant as capabilities grow:
 
-Persistence is just pandas + parquet (via pyarrow) — no separate store engine, no cache
-catalog. Bars are written with `DataFrame.to_parquet`; a re-ingest reads the existing
-file, concatenates, and drops duplicate timestamps (the freshly fetched bar wins, so
-corrections and late volume overwrite the stored value). OpenBB's frame is persisted
-**as-is** — its own schema, its own `date` index.
+| Layer | File | Job | Grows when… |
+|---|---|---|---|
+| MCP edge | `server.py` | one thin `@mcp.tool` per capability (wires feed → lake → text) | you add a capability |
+| OpenBB glue | `feeds.py` | one thin fetch fn per capability, returns OpenBB's frame **as-is** | you add a capability |
+| Persistence | `lake.py` | **generic** parquet persist/merge/read, keyed by path segments | never (kind-agnostic) |
 
-What stays custom (and should): the MCP/OAuth surface (`server.py`) and the thin
-fetch-merge-persist glue (`bars.py`).
+OpenBB does the fetch *and* the normalization (its standardized model returns
+canonical-named OHLCV), so there is no hand-rolled downloader or normalizer. Commands and
+providers are *separate* extensions: each data type is a command ext (`openbb-equity`,
+`openbb-crypto`) on top of the shared `openbb-yfinance` provider. **Adding a capability =
+a fn in `feeds.py` + a tool in `server.py` (+ its command extension); `lake.py` is
+untouched.**
+
+Persistence is just pandas + parquet (via pyarrow) — no store engine, no cache catalog.
+`lake.ingest` writes with `DataFrame.to_parquet`; a re-ingest reads the existing file,
+concatenates, and drops duplicate index entries (the freshly fetched row wins, so
+corrections and late values overwrite the stored one). Frames are persisted **as-is** —
+OpenBB's own schema, its own `date` index.
 
 ## The store
 
 Plain parquet, readable by any pandas/pyarrow/duckdb consumer. Self-describing layout —
-the path is the metadata:
+the path is the metadata; the first segment is the dataset namespace (`equity`, `crypto`):
 
 ```
-<DATA_ROOT>/bars/<source>/<symbol>/<interval>.parquet   e.g. var/data/bars/yfinance/AAPL/1d.parquet
+<DATA_ROOT>/<asset>/<source>/<symbol>/<interval>.parquet   e.g. var/data/crypto/yfinance/BTC-USD/1d.parquet
 ```
 
-Each `data-ingest` fetches the requested window and **merges** it into that file,
-de-duplicated on the timestamp index, so the file accumulates history across calls
-(fetch 2024 today, 2023 tomorrow — the file holds both). `refresh=true` replaces the
-file with just the new fetch instead of merging. There is no cache short-circuit: an
-ingest always hits OpenBB, then folds the result into what's stored.
-
-## Code layout
-
-| File | Role |
-|---|---|
-| `bars.py` | fetch bars via OpenBB + persist to parquet (merge/dedupe/append); read back |
-| `server.py` | FastMCP server: OAuth wiring + the MCP tools |
+Each ingest fetches the requested window and **merges** it into that file, de-duplicated
+on the timestamp index, so the file accumulates history across calls (fetch 2024 today,
+2023 tomorrow — the file holds both). `refresh=true` replaces the file with just the new
+fetch instead of merging. There is no cache short-circuit: an ingest always hits OpenBB,
+then folds the result into what's stored.
 
 ## MCP tools
 
 | Tool | Purpose |
 |---|---|
-| `data-ingest` | fetch bars and merge them into the parquet lake → summary |
-| `data-read` | read stored bars back out of the lake (read-only) |
+| `equity-ingest` | fetch equity OHLCV bars and merge them into the lake → summary |
+| `crypto-ingest` | fetch crypto OHLCV bars and merge them into the lake → summary |
+| `data-read` | read stored bars back out of the lake (any `asset`; read-only) |
 
-`data-ingest` args: `symbol`, `interval?="1d"` (OpenBB's vocabulary:
+`*-ingest` args: `symbol`, `interval?="1d"` (OpenBB's vocabulary:
 `1m/2m/5m/15m/30m/60m/90m/1h/1d/5d/1W/1M/1Q`), `start?`/`end?` (ISO `YYYY-MM-DD`; omit
 both = the provider's default window, ~1y for yfinance), `source?="yfinance"`,
-`refresh?=false`.
+`refresh?=false`. `data-read` also takes `asset` (`equity`|`crypto`) and `tail?=10`.
 
 ## Setup & run
 

@@ -1,12 +1,18 @@
-"""MCP server: historical market-data tools over OpenBB (yfinance provider).
+"""MCP server: historical market-data tools over OpenBB, persisted to a parquet lake.
 
-Bars are fetched through OpenBB and *persisted* to a plain parquet lake (``bars.py``)
-so a download is kept and accumulates across calls. Returns trusted, structured market
-data (no guardrail).
+Three layers, each with one job:
+  - this file (server.py) — THIN glue to MCP: one tool per capability
+  - feeds.py              — THIN glue to OpenBB: one fetch fn per capability
+  - lake.py               — OWNED generic parquet persist/merge/read (kind-agnostic)
+
+A capability tool just wires feed → lake → text. Adding one (another OpenBB endpoint)
+is a ``feeds`` fn + a tool here; ``lake.py`` never changes. All tools return trusted,
+structured market data (no guardrail).
 
 Tools exposed:
-  data-ingest        — fetch bars and merge them into the parquet lake
-  data-read          — read stored bars back out of the lake
+  equity-ingest — fetch equity OHLCV bars and merge them into the lake
+  crypto-ingest — fetch crypto OHLCV bars and merge them into the lake
+  data-read     — read stored bars back out of the lake (any asset)
 """
 import os
 import sys
@@ -19,7 +25,8 @@ from fastmcp import FastMCP
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from security.serve import serve  # noqa: E402
 
-import bars  # noqa: E402
+import feeds  # noqa: E402
+import lake  # noqa: E402
 
 mcp = FastMCP(name="data")
 
@@ -35,17 +42,17 @@ def load_env() -> None:
     load_dotenv(env_path, override=True)
 
 
-def _summary_line(s: dict) -> str:
+def _fmt(s: dict) -> str:
+    """Render a lake.ingest summary as a model-facing line."""
     return (
-        f"Ingested {s.get('symbol')} {s.get('interval')} bars ({s.get('source')}): "
-        f"fetched {s.get('fetched')}, +{s.get('added')} new "
-        f"→ {s.get('rows')} stored ({s.get('start')} → {s.get('end')}).\n"
-        f"Stored at {s.get('path')}"
+        f"Ingested {s['key']}: fetched {s['fetched']}, +{s['added']} new "
+        f"→ {s['rows']} stored ({s['start']} → {s['end']}).\n"
+        f"Stored at {s['path']}"
     )
 
 
-@mcp.tool(name="data-ingest")
-def data_ingest(
+@mcp.tool(name="equity-ingest")
+def equity_ingest(
     symbol: str,
     interval: str = "1d",
     start: str | None = None,
@@ -54,45 +61,69 @@ def data_ingest(
     refresh: bool = False,
 ) -> str:
     """
-    Fetch market data from Yahoo Finance and persist it to the local parquet lake.
+    Fetch equity OHLCV bars from Yahoo Finance and persist them to the parquet lake.
 
-    Fetches OHLCV bars for one ``symbol`` (e.g. "AAPL", "BTC-USD") and merges them into
-    the symbol's stored parquet file, de-duplicating on timestamp — so the file
-    accumulates history across calls (fetch 2024 today, 2023 tomorrow, keep both).
-    ``interval`` is OpenBB's bar size (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1W,
-    1M, 1Q; default 1d). ``start``/``end`` are ISO dates (YYYY-MM-DD); omit both for the
-    provider's default window (yfinance: ~1y). Pass ``refresh=true`` to replace the
-    stored file with just this fetch instead of merging.
+    Fetches bars for one equity ``symbol`` (e.g. "AAPL") and merges them into the stored
+    file, de-duplicated on timestamp — so the file accumulates history across calls
+    (fetch 2024 today, 2023 tomorrow, keep both). ``interval`` is OpenBB's bar size (1m,
+    2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1W, 1M, 1Q; default 1d). ``start``/``end`` are
+    ISO dates (YYYY-MM-DD); omit both for the provider's default window (yfinance: ~1y).
+    Pass ``refresh=true`` to replace the stored file with just this fetch instead of merging.
     """
-    return _summary_line(bars.ingest(symbol, interval, start, end, source, refresh))
+    symbol = (symbol or "").strip().upper()
+    df = feeds.equity_bars(symbol, interval, start, end, source)
+    return _fmt(lake.ingest(("equity", source, symbol, interval), df, refresh=refresh))
+
+
+@mcp.tool(name="crypto-ingest")
+def crypto_ingest(
+    symbol: str,
+    interval: str = "1d",
+    start: str | None = None,
+    end: str | None = None,
+    source: str = "yfinance",
+    refresh: bool = False,
+) -> str:
+    """
+    Fetch crypto OHLCV bars from Yahoo Finance and persist them to the parquet lake.
+
+    Same behavior as equity-ingest but for a crypto pair ``symbol`` (e.g. "BTC-USD",
+    "ETH-USD"): merges into the stored file de-duplicated on timestamp, accumulating
+    history across calls. ``interval``/``start``/``end``/``refresh`` work identically.
+    """
+    symbol = (symbol or "").strip().upper()
+    df = feeds.crypto_bars(symbol, interval, start, end, source)
+    return _fmt(lake.ingest(("crypto", source, symbol, interval), df, refresh=refresh))
 
 
 @mcp.tool(name="data-read")
 def data_read(
+    asset: str,
     symbol: str,
     interval: str = "1d",
     source: str = "yfinance",
     tail: int = 10,
 ) -> str:
     """
-    Read stored bars back out of the parquet lake (ingest them first with data-ingest).
+    Read stored bars back out of the parquet lake (ingest them first).
 
-    Returns the last ``tail`` rows (default 10) of stored OHLCV bars for
-    ``symbol``/``interval``/``source`` as text, plus the total row count and the
-    stored file path. Reads only — never fetches.
+    ``asset`` is the dataset namespace: "equity" or "crypto". Returns the last ``tail``
+    rows (default 10) of stored OHLCV bars for ``asset``/``symbol``/``interval``/``source``
+    as text, plus the total row count and the stored file path. Reads only — never fetches.
     """
+    asset = (asset or "").strip().lower()
     symbol = (symbol or "").strip().upper()
-    df = bars.read(symbol, interval, source)
+    df = lake.read(asset, source, symbol, interval)
     if df is None or df.empty:
         return (
-            f"No stored bars for {symbol} {interval} ({source}). "
-            f"Run data-ingest first."
+            f"No stored {asset} bars for {symbol} {interval} ({source}). "
+            f"Run {asset}-ingest first."
         )
-    path = bars.path_for(source, symbol, interval)
+    path = lake.path_for(asset, source, symbol, interval)
     n = max(0, int(tail))
     view = df.tail(n) if n else df
     return (
-        f"{len(df)} {interval} bars for {symbol} ({source}); showing last {len(view)}.\n"
+        f"{len(df)} {interval} {asset} bars for {symbol} ({source}); showing last {len(view)}.\n"
         f"Stored at {path}\n\n"
         f"{view.to_string()}"
     )
