@@ -1,0 +1,96 @@
+"""Run a vectorbt backtest: lake → library signal → strategy entries/exits → stats.
+
+Returns vectorbt's ``stats()`` essentially untransformed (just made JSON-safe). No
+analysis/reshaping here — that's deliberately a separate concern.
+"""
+from __future__ import annotations
+
+import json
+
+import catalog
+from engines import lake
+
+# Canonical interval → pandas offset alias, used as ``freq`` so vbt's annualized ratios
+# (Sharpe etc.) are meaningful. Only FIXED-length periods are here: vectorbt annualizes
+# by converting freq to a Timedelta, which months can't be (variable length) — so 1mo/1M
+# are deliberately excluded and rejected upfront rather than crashing deep in vbt.
+_FREQ = {
+    "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min",
+    "1h": "1h", "1d": "1D", "1wk": "1W",
+}
+
+
+def _jsonable(series) -> dict:
+    """vbt stats() Series → JSON-safe dict (Timestamp/Timedelta/NaN → str), untransformed."""
+    return json.loads(json.dumps(series.to_dict(), default=str))
+
+
+def _position_to_signals(position):
+    """Engine glue: target-position series (1=long / 0=flat) → vectorbt boolean entries/exits.
+
+    Entries where the position turns on (flat→long), exits where it turns off (long→flat).
+    This is the only vectorbt-specific step; the position itself is engine-agnostic.
+    """
+    pos = position.fillna(0.0)
+    prev = pos.shift(1).fillna(0.0)
+    entries = (prev <= 0) & (pos > 0)
+    exits = (prev > 0) & (pos <= 0)
+    return entries, exits
+
+
+def run_backtest(
+    symbol: str,
+    strategy: str = "mean_reversion",
+    namespace: str = "bars",
+    source: str = "yfinance",
+    interval: str = "1d",
+    start: str | None = None,
+    end: str | None = None,
+    params: dict | None = None,
+) -> dict:
+    """Run one backtest to completion. Blocking. Returns a small envelope around vbt stats()."""
+    import vectorbt as vbt  # lazy: keep numba/vbt JIT import cost off module load
+
+    ohlcv = lake.read_ohlcv(
+        symbol, interval=interval, namespace=namespace, source=source, start=start, end=end
+    )
+    if ohlcv.empty:
+        raise ValueError(f"No rows for {symbol} {interval} in the requested window.")
+    if interval not in _FREQ:
+        raise ValueError(
+            f"Interval {interval!r} isn't supported for annualized backtest stats — "
+            f"vectorbt needs a fixed-length period and months are variable. Supported: "
+            f"{sorted(_FREQ)}. Use daily 1d (the default)."
+        )
+
+    valid = {s["name"] for s in catalog.strategies()}
+    if strategy not in valid:
+        raise ValueError(f"Unknown strategy {strategy!r}. Available: {sorted(valid)}")
+
+    try:
+        position = catalog.materialize(strategy, ohlcv, params=params)[strategy]
+    except Exception:  # noqa: BLE001
+        if len(ohlcv) < 50:
+            raise ValueError(
+                f"{symbol} {interval} has only {len(ohlcv)} bars — too few for "
+                f"{strategy!r}'s indicator window. Use a longer date range or a finer "
+                f"interval (daily 1d has far more bars than monthly)."
+            ) from None
+        raise
+    entries, exits = _position_to_signals(position)
+    pf = vbt.Portfolio.from_signals(
+        ohlcv["close"],
+        entries=entries,
+        exits=exits,
+        freq=_FREQ.get(interval),
+    )
+    return {
+        "engine": "vectorbt",
+        "symbol": symbol.strip().upper(),
+        "strategy": strategy,
+        "namespace": namespace,
+        "source": source,
+        "interval": interval,
+        "rows": int(len(ohlcv)),
+        "stats": _jsonable(pf.stats()),
+    }
