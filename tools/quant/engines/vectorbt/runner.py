@@ -23,6 +23,28 @@ def _jsonable(series) -> dict:
     return json.loads(json.dumps(series.to_dict(), default=str))
 
 
+def _f(x):
+    """Coerce to float, mapping NaN/None/non-numeric to None (JSON-safe + sortable)."""
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return None
+    return None if x != x else x  # NaN
+
+
+def summary(stats: dict) -> dict:
+    """Native vbt stats → the normalized metric row a sweep ranks on."""
+    dd = _f(stats.get("Max Drawdown [%]"))
+    trades = _f(stats.get("Total Trades"))
+    return {
+        "return_pct": _f(stats.get("Total Return [%]")),
+        "sharpe": _f(stats.get("Sharpe Ratio")),
+        "max_drawdown_pct": None if dd is None else abs(dd),
+        "trades": None if trades is None else int(trades),
+        "win_rate": _f(stats.get("Win Rate [%]")),  # percent, to match the other engine
+    }
+
+
 def _position_to_signals(position):
     """Engine glue: target-position series (1=long / 0=flat) → vectorbt boolean entries/exits.
 

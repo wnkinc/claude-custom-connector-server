@@ -23,11 +23,20 @@ _CAPITAL = 1_000_000  # starting cash (USD); returns are reported as % so the sc
 
 
 def _num(v):
-    """Best-effort JSON-safe scalar: float when numeric, else str."""
+    """Best-effort JSON-safe scalar for native stats: float when numeric, else str."""
     try:
         return float(v)
     except (TypeError, ValueError):
         return str(v)
+
+
+def _f(x):
+    """Coerce to float, mapping NaN/None/non-numeric to None (JSON-safe + sortable)."""
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return None
+    return None if x != x else x  # NaN
 
 
 def run(ohlcv, position, interval: str) -> dict:
@@ -146,9 +155,57 @@ def run(ohlcv, position, interval: str) -> dict:
             "starting_balance": float(_CAPITAL),
             "ending_balance": ending,
             "total_return_pct": (ending - _CAPITAL) / _CAPITAL * 100.0,
+            "max_drawdown_pct": _max_drawdown_pct(positions),
             "total_positions": int(len(positions)),
             "returns": _stats(analyzer.get_performance_stats_returns),
             "pnl": _stats(lambda: analyzer.get_performance_stats_pnls(USD)),
         }
     finally:
         engine.dispose()
+
+
+def _money(x):
+    """Parse a positions-report PnL cell (number or a 'amount CCY' string) to float, else None."""
+    if isinstance(x, (int, float)):
+        return float(x)
+    try:
+        return float(str(x).split()[0])  # "1234.56 USD" -> 1234.56
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def _max_drawdown_pct(positions):
+    """Max drawdown % from the realized-PnL equity curve (Nautilus has no native stat for it).
+
+    Nautilus's per-bar return series isn't a usable equity basis — it carries per-position
+    returns on inconsistent bases (values like -0.95 / +20), so its cumprod path is nonsense
+    even though the endpoint happens to match. Instead rebuild realized equity = starting
+    capital + cumulative realized PnL in close order, and take its deepest peak-to-trough drop.
+    Realized-only (ignores open-position mark-to-market), so it's a conservative drawdown.
+    Returns 0.0 with no closed positions and None if it can't be derived.
+    """
+    try:
+        if positions is None or len(positions) == 0:
+            return 0.0
+        df = positions.sort_values("ts_closed")
+        pnl = df["realized_pnl"].map(_money)
+        if pnl.isna().any():
+            return None
+        equity = _CAPITAL + pnl.cumsum()
+        peak = equity.cummax()
+        return abs(float(((equity - peak) / peak).min()) * 100.0)
+    except Exception:  # noqa: BLE001 — drawdown is best-effort, never fatal
+        return None
+
+
+def summary(stats: dict) -> dict:
+    """Native Nautilus stats → the normalized metric row a sweep ranks on."""
+    win_rate = _f(stats.get("pnl", {}).get("Win Rate"))
+    return {
+        "return_pct": _f(stats.get("total_return_pct")),
+        "sharpe": _f(stats.get("returns", {}).get("Sharpe Ratio (252 days)")),
+        "max_drawdown_pct": _f(stats.get("max_drawdown_pct")),
+        "trades": stats.get("total_positions"),
+        # analyzer win rate is a 0–1 fraction; scale to percent to match the other engine.
+        "win_rate": None if win_rate is None else win_rate * 100.0,
+    }

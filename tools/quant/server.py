@@ -85,6 +85,38 @@ def backtest(
     )
 
 
+@mcp.tool
+def backtest_sweep(
+    symbol: str,
+    strategy: str = "mean_reversion",
+    param_grid: dict | None = None,
+    engine: str = "vectorbt",
+    metric: str = "return_pct",
+    top: int = 20,
+    source: str = "yfinance",
+    namespace: str = "bars",
+    interval: str = "1d",
+    start: str | None = None,
+    end: str | None = None,
+) -> dict:
+    """Sweep a strategy's params over a grid and return the combos ranked by `metric`.
+
+    param_grid is {param: [values, ...]} (see backtest_strategies for a strategy's tunable
+    params); the cartesian product is the combo set, capped at 200. Each combo is backtested
+    and reduced to one normalized metric row — return_pct, sharpe, max_drawdown_pct, trades,
+    win_rate — so combos are directly comparable. Results are sorted best-first by `metric`
+    (default return_pct, the metric computed identically on both engines) and trimmed to `top`.
+
+    Same data/engine semantics as backtest. Note: a nautilus sweep runs a full event-loop
+    backtest per combo, so it's slow on big grids or large intraday data — prefer vectorbt
+    (or a small grid) for wide sweeps.
+    """
+    return engine_core.sweep(
+        symbol, strategy=strategy, param_grid=param_grid, engine=engine, metric=metric,
+        top=top, namespace=namespace, source=source, interval=interval, start=start, end=end,
+    )
+
+
 def main() -> None:
     load_env()
     port = int(os.getenv("MCP_PORT", "8064"))
