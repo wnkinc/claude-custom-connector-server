@@ -42,6 +42,31 @@ def library_lineage(name: str) -> dict:
 
 
 @mcp.tool
+def indicators_available() -> list[dict]:
+    """The mintable indicator menu: what `add_variant` can create + what's already minted.
+
+    Variants are data, not new code: pick an `indicator` from this menu, fill its `params`
+    (schema included), then call `add_variant`. `minted` lists the canonical nodes that
+    already exist — reuse those instead of re-minting. Use this before adding a variant so
+    you build on what's available rather than duplicating it.
+    """
+    return catalog.indicators_available()
+
+
+@mcp.tool
+def add_variant(indicator: str, params: dict | None = None) -> dict:
+    """Mint a variant of a known indicator (e.g. indicator="rsi", params={"length": 34}).
+
+    Creates a first-class library node usable immediately by `library_list` / `backtest`
+    in this same session — no server restart. Idempotent: the same (indicator, params)
+    always maps to one canonical node name, so re-minting is a no-op (created=false), which
+    is how redundancy is prevented at the variant layer. See `indicators_available` for the
+    menu and param schema. Returns {ok, name, created, ...} or {ok: false, error}.
+    """
+    return catalog.add_variant(indicator, params)
+
+
+@mcp.tool
 def backtest_strategies() -> list[dict]:
     """List strategies: tunable params (name → default), the library pieces each `uses`, and a one-line doc.
 

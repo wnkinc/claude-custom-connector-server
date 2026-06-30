@@ -47,6 +47,11 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
+# Precise carve-out: the variant registry is the ONLY repo file the server writes
+# (add_variant appends validated indicator params). Scoped to the single JSON file so the
+# library code (momentum.py, catalog.py, ...) stays read-only — the agent can add data,
+# never rewrite the math/validator. Overrides ProtectHome=read-only for just this path.
+ReadWritePaths=/home/wes/Documents/mcp-tools/tools/quant/library/variants.json
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=yes
 RestrictRealtime=yes
