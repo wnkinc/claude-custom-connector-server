@@ -24,3 +24,6 @@ openbb-crypto==1.6.2
 openbb-currency==1.6.2
 openbb-yfinance==1.6.3
 openbb-tiingo==1.6.1
+# Direct vendor SDK (NOT an OpenBB provider — OpenBB has no databento extension). Opt-in
+# alternative equity source, used via equity-ingest source="databento". Needs DATABENTO_API_KEY.
+databento==0.80.0

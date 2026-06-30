@@ -40,6 +40,13 @@ _CREDENTIALS = {"TIINGO_API_KEY": "tiingo_token"}
 _TIINGO_CAP = 10000
 _TIINGO_INTRADAY = frozenset({"1m", "2m", "5m", "15m", "30m", "60m", "1h", "90m"})
 
+# Databento (opt-in alt equity source; direct SDK, not OpenBB). It offers only these four
+# OHLCV bar sizes — map our interval vocabulary onto its schema names. Dataset is fixed to
+# EQUS.MINI: Databento's consolidated US-equity feed (Nasdaq + NYSE + other venues), one
+# clean bar per interval (history from 2023-03-28).
+_DATABENTO_SCHEMA = {"1s": "ohlcv-1s", "1m": "ohlcv-1m", "1h": "ohlcv-1h", "1d": "ohlcv-1d"}
+_DATABENTO_EQUITY_DATASET = "EQUS.MINI"
+
 
 def _apply_credentials(obb) -> None:
     """Inject provider tokens from the env onto OpenBB's credential store (idempotent)."""
@@ -140,3 +147,41 @@ def fx_bars(
 ) -> pd.DataFrame:
     """Historical OHLC bars for an FX pair (e.g. EURUSD). FX frames carry no volume."""
     return _bars("currency", symbol, interval, start, end, provider)
+
+
+# ── Databento (opt-in alt equity source; direct SDK, NOT OpenBB) ─────────────
+
+
+def _databento():
+    """A Databento Historical client; reads ``DATABENTO_API_KEY`` from the env (paid)."""
+    if not os.getenv("DATABENTO_API_KEY"):
+        raise ValueError(
+            "DATABENTO_API_KEY is not set — add it to .env to ingest equities from databento."
+        )
+    import databento as db
+
+    return db.Historical()  # picks up DATABENTO_API_KEY from the environment
+
+
+def databento_bars(
+    symbol: str, interval: str = "1d", start: str | None = None, end: str | None = None,
+) -> pd.DataFrame:
+    """Equity OHLCV bars from Databento (direct SDK) — same signature as ``equity_bars``.
+
+    Databento isn't an OpenBB provider, so this calls its SDK directly. It offers only
+    1s/1m/1h/1d OHLCV bars (``interval`` is mapped to its ``ohlcv-*`` schema) on the
+    consolidated US-equity dataset (EQUS.MINI — Nasdaq + NYSE + other venues, one bar per
+    interval), and requires a ``start``. Returns the SDK frame as-is (``ts_event``-indexed,
+    carrying the ticker ``symbol``). Uses default symbology (``raw_symbol`` in).
+    """
+    schema = _DATABENTO_SCHEMA.get(interval)
+    if schema is None:
+        raise ValueError(
+            f"databento offers only {sorted(_DATABENTO_SCHEMA)} bar intervals; got {interval!r}."
+        )
+    if not start:
+        raise ValueError("databento requires an explicit start date (YYYY-MM-DD).")
+    store = _databento().timeseries.get_range(
+        dataset=_DATABENTO_EQUITY_DATASET, symbols=[symbol], schema=schema, start=start, end=end,
+    )
+    return store.to_df()

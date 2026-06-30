@@ -48,6 +48,35 @@ def read(*key: str) -> pd.DataFrame | None:
     return pd.read_parquet(path)
 
 
+def catalog(*prefix: str) -> list[dict]:
+    """List every dataset stored in the lake (optionally under a key ``prefix``).
+
+    Discovery from a pure file perspective: walk the lake for ``*.parquet`` leaves and turn
+    each path back into its key segments — the path IS the metadata, so this needs no index
+    or registry. Light metadata only: the row count is read from the parquet footer (no data
+    is loaded) and the time span from just the index column. One dict per file, sorted by key.
+    A bad/unreadable file is listed with null stats rather than failing the whole listing.
+    """
+    root = data_root()
+    base = root.joinpath(*[_safe(p) for p in prefix])
+    if not base.exists():
+        return []
+    out: list[dict] = []
+    for path in sorted(base.rglob("*.parquet")):
+        entry = {"key": "/".join(path.relative_to(root).with_suffix("").parts),
+                 "rows": None, "start": None, "end": None, "path": str(path)}
+        try:
+            import pyarrow.parquet as pq
+            entry["rows"] = pq.ParquetFile(path).metadata.num_rows
+            idx = pd.read_parquet(path, columns=[]).index  # index only, no data columns
+            if len(idx):
+                entry["start"], entry["end"] = idx.min().isoformat(), idx.max().isoformat()
+        except Exception:  # noqa: BLE001 — a listing must never fail on one bad file
+            pass
+        out.append(entry)
+    return out
+
+
 def _merge(existing: pd.DataFrame, fetched: pd.DataFrame) -> pd.DataFrame:
     """Append ``fetched`` onto ``existing``, dropping duplicate index entries (fetched wins).
 

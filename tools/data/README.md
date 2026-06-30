@@ -12,17 +12,24 @@ standard mcp-tools security spine.
 | `equity-ingest` | fetch equity OHLCV bars → merge into the lake |
 | `crypto-ingest` | fetch crypto OHLCV bars → merge into the lake |
 | `fx-ingest` | fetch FX (currency pair) OHLC bars → merge into the lake |
-| `data-read` | read stored bars back out of the lake (read-only) |
+| `data-catalog` | list what's stored — the inventory of assets/symbols/intervals (read-only) |
+| `data-read` | read one stored series back out of the lake (read-only) |
 
 **`*-ingest` args:** `symbol` (Tiingo-style: crypto/FX are hyphen-less — `BTCUSD`, `EURUSD`),
 `interval?="1d"` (`1m/2m/5m/15m/30m/60m/90m/1h/1d/5d/1W/1M/1Q`), `start?`/`end?` (ISO
-`YYYY-MM-DD`), `refresh?=false` (replace instead of merge). No `source` — provider is fixed
-to Tiingo.
-**`data-read` args:** `asset` (`equity`|`crypto`|`fx`), `symbol`, `interval?="1d"`, `tail?=10`.
+`YYYY-MM-DD`), `refresh?=false` (replace instead of merge). `equity-ingest` also takes
+`source?="tiingo"` — pass `"databento"` only when explicitly asked for it by name (paid SDK,
+consolidated US equities, 1s/1m/1h/1d only, `start` required, needs `DATABENTO_API_KEY`).
+**`data-catalog`** is discovery — call it to see what's available: every stored dataset
+(`asset/source/symbol/interval` + row count + date span), optionally narrowed by `asset`
+(`equity`|`crypto`|`fx`). **`data-read`** reads one series: `asset`, `symbol`, `interval?="1d"`,
+`source?="tiingo"` (must match how it was ingested), `tail?=10`. Bars are keyed by interval AND
+source; a read miss returns what *is* stored for that symbol, so the LLM can discover-then-drill
+rather than dead-end.
 
-Deep **intraday** pulls page Tiingo's 10k-bar-per-request cap automatically. On the free tier
-a multi-year 1m pull can exhaust the hourly request limit and return a **PARTIAL** result —
-just re-run later (keep `refresh=false`) and the lake merge extends coverage.
+Deep **intraday** pulls page the provider's per-request cap automatically. On Tiingo's free
+tier a multi-year 1m pull can exhaust the hourly request limit and return a **PARTIAL** result
+— just re-run later (keep `refresh=false`) and the lake merge extends coverage.
 
 ## Design
 
@@ -35,11 +42,16 @@ Three layers, so the owned surface stays constant as capabilities grow:
 | `lake.py` | generic parquet persist/merge/read, keyed by path segments (never changes per capability) |
 
 OpenBB standardizes fetch + schema across providers, so a **new data type** = a command ext
-(`openbb-equity`/`-crypto`/`-currency`) + a `feeds` fn + a tool; a **new source** = just a
-provider ext, used via `provider=` (no new code). Keyed providers (Tiingo) need a token —
-`feeds._apply_credentials` injects `TIINGO_API_KEY` onto `obb.user.credentials`, since OpenBB
-doesn't read credential env vars. `openbb-yfinance` stays installed/reachable in code but no
-tool uses it.
+(`openbb-equity`/`-crypto`/`-currency`) + a `feeds` fn + a tool; a **new OpenBB source** =
+just a provider ext, used via `provider=` (no new code). Keyed providers (Tiingo) need a
+token — `feeds._apply_credentials` injects `TIINGO_API_KEY` onto `obb.user.credentials`, since
+OpenBB doesn't read credential env vars. `openbb-yfinance` stays installed/reachable in code
+but no tool uses it.
+
+A source OpenBB doesn't front uses its **own SDK** behind the same `feeds` seam:
+`feeds.databento_bars` (Databento) is an opt-in alternative for `equity-ingest`
+(`source="databento"`), keyed into the lake under its own `databento` namespace. The lake
+doesn't care whether a feed is OpenBB- or SDK-backed.
 
 ## The store
 
@@ -74,7 +86,8 @@ adding/removing an extension. To publish: allowlist hosts in
 
 | Var | Default | Meaning |
 |---|---|---|
-| `TIINGO_API_KEY` | _(empty)_ | **required** — Tiingo is the fixed provider; empty → ingest fails |
+| `TIINGO_API_KEY` | _(empty)_ | **required** — Tiingo is the default provider; empty → ingest fails |
+| `DATABENTO_API_KEY` | _(empty)_ | optional — only for `equity-ingest source="databento"` |
 | `MCP_PORT` | `8062` | loopback MCP port |
 | `MCP_AUTH_ENABLED` | `0` | `1` = require Google OAuth (public serving) |
 | `DATA_ROOT` | `<tool>/var/data` | parquet lake root (StateDirectory on the unit) |
@@ -84,6 +97,7 @@ adding/removing an extension. To publish: allowlist hosts in
 ## Egress
 
 Behind the L2 egress wall, allowed hosts live in `security/egress-proxy/allowlist/data.txt`:
-`api.tiingo.com` (data) + the Google OAuth hosts (token/JWKS when `MCP_AUTH_ENABLED=1`). Yahoo
-hosts remain for the still-installed `openbb-yfinance`. OpenBB does no network at import. Find
-misses via `TCP_DENIED` in `/var/log/squid/access.log`.
+`api.tiingo.com` (default data), `hist.databento.com` (only when `source="databento"`), + the
+Google OAuth hosts (token/JWKS when `MCP_AUTH_ENABLED=1`). Yahoo hosts remain for the
+still-installed `openbb-yfinance`. OpenBB does no network at import. Find misses via
+`TCP_DENIED` in `/var/log/squid/access.log`.

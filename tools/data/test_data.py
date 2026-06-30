@@ -92,6 +92,82 @@ def test_read_missing_returns_none(tmp_path, monkeypatch):
     assert lake.read("equity", "yfinance", "NOPE", "1d") is None
 
 
+def test_catalog_lists_keys_with_rows_and_span(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    lake.ingest(("equity", "tiingo", "AAPL", "1m"), _frame(["2024-01-02", "2024-01-03"], [1.0, 2.0]))
+    lake.ingest(("crypto", "tiingo", "BTCUSD", "1d"), _frame(["2024-01-02"], [5.0]))
+
+    cat = {e["key"]: e for e in lake.catalog()}
+    assert set(cat) == {"equity/tiingo/AAPL/1m", "crypto/tiingo/BTCUSD/1d"}
+    aapl = cat["equity/tiingo/AAPL/1m"]
+    assert aapl["rows"] == 2  # from the parquet footer, no data load
+    assert aapl["start"].startswith("2024-01-02") and aapl["end"].startswith("2024-01-03")
+
+
+def test_catalog_prefix_narrows_to_namespace(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    lake.ingest(("equity", "tiingo", "AAPL", "1m"), _frame(["2024-01-02"], [1.0]))
+    lake.ingest(("crypto", "tiingo", "BTCUSD", "1d"), _frame(["2024-01-02"], [5.0]))
+
+    keys = [e["key"] for e in lake.catalog("equity")]
+    assert keys == ["equity/tiingo/AAPL/1m"]
+
+
+def test_catalog_empty_lake_is_empty_list(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    assert lake.catalog() == []
+    assert lake.catalog("equity") == []
+
+
+# ── server: data-catalog (inventory) vs data-read (series) ───────────────────
+
+
+def test_data_catalog_lists_everything(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import server
+
+    lake.ingest(("equity", "tiingo", "AAPL", "1m"), _frame(["2024-01-02"], [1.0]))
+    lake.ingest(("equity", "databento", "AAPL", "1m"), _frame(["2024-01-02"], [1.0]))
+    out = server.data_catalog()  # whole lake
+    assert "equity/tiingo/AAPL/1m" in out and "equity/databento/AAPL/1m" in out
+
+
+def test_data_catalog_narrows_by_asset(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import server
+
+    lake.ingest(("equity", "tiingo", "AAPL", "1m"), _frame(["2024-01-02"], [1.0]))
+    lake.ingest(("crypto", "tiingo", "BTCUSD", "1d"), _frame(["2024-01-02"], [5.0]))
+    out = server.data_catalog("equity")
+    assert "equity/tiingo/AAPL/1m" in out and "BTCUSD" not in out
+
+
+def test_data_catalog_empty_lake(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import server
+
+    assert "empty" in server.data_catalog().lower()
+
+
+def test_data_read_miss_hints_what_is_stored(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import server
+
+    lake.ingest(("equity", "tiingo", "AAPL", "1m"), _frame(["2024-01-02"], [1.0]))
+    # ask for the default 1d/tiingo that doesn't exist -> hint points at the stored 1m
+    out = server.data_read("equity", "AAPL")
+    assert "No equity/tiingo/AAPL/1d" in out and "equity/tiingo/AAPL/1m" in out
+
+
+def test_data_read_hit_returns_rows(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import server
+
+    lake.ingest(("equity", "tiingo", "AAPL", "1m"), _frame(["2024-01-02", "2024-01-03"], [1.0, 2.0]))
+    out = server.data_read("equity", "AAPL", "1m", "tiingo", tail=1)
+    assert "1m equity bars for AAPL (tiingo)" in out
+
+
 # ── feeds: OpenBB endpoint wrappers (fake obb, no network) ───────────────────
 
 
@@ -238,3 +314,42 @@ def test_apply_credentials_noop_without_env(monkeypatch):
     creds = SimpleNamespace(tiingo_token=None)
     feeds._apply_credentials(SimpleNamespace(user=SimpleNamespace(credentials=creds)))
     assert creds.tiingo_token is None
+
+
+# ── feeds: Databento (opt-in alt equity source, direct SDK) ──────────────────
+
+
+def _fake_databento(capture, df):
+    """A stand-in Databento client whose timeseries.get_range records its kwargs."""
+    def get_range(**kwargs):
+        capture.update(kwargs)
+        return SimpleNamespace(to_df=lambda: df)
+    return SimpleNamespace(timeseries=SimpleNamespace(get_range=get_range))
+
+
+def test_databento_bars_maps_interval_to_schema(monkeypatch):
+    cap = {}
+    df = _frame(["2024-01-02"], [1.0])
+    monkeypatch.setattr(feeds, "_databento", lambda: _fake_databento(cap, df))
+
+    out = feeds.databento_bars("AAPL", "1m", "2024-01-01", "2024-01-10")
+    assert out is df
+    assert cap["schema"] == "ohlcv-1m"  # interval mapped to databento schema
+    assert cap["symbols"] == ["AAPL"] and cap["dataset"] == feeds._DATABENTO_EQUITY_DATASET
+    assert cap["start"] == "2024-01-01" and cap["end"] == "2024-01-10"
+
+
+def test_databento_rejects_unsupported_interval():
+    with pytest.raises(ValueError, match="interval"):
+        feeds.databento_bars("AAPL", "5m", "2024-01-01")  # databento has no ohlcv-5m
+
+
+def test_databento_requires_start():
+    with pytest.raises(ValueError, match="start"):
+        feeds.databento_bars("AAPL", "1d", None)
+
+
+def test_databento_requires_api_key(monkeypatch):
+    monkeypatch.delenv("DATABENTO_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="DATABENTO_API_KEY"):
+        feeds._databento()
