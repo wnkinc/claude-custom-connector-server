@@ -10,7 +10,7 @@ from security.serve import serve  # noqa: E402
 
 import catalog  # noqa: E402
 
-mcp = FastMCP(name="hamilton")
+mcp = FastMCP(name="quant")
 
 
 def load_env() -> None:
@@ -43,7 +43,7 @@ def library_lineage(name: str) -> dict:
 def main() -> None:
     load_env()
     port = int(os.getenv("MCP_PORT", "8064"))
-    # hamilton returns trusted, internally-generated content -> no guardrail / approval.
+    # quant returns trusted, internally-generated content -> no guardrail / approval.
     serve(mcp, port=port)
 
 

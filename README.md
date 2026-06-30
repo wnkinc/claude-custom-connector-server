@@ -27,9 +27,9 @@ mcp-tools/
       feeds.py           #   thin OpenBB fetch fns (equity_bars, crypto_bars, fx_bars)
       lake.py            #   generic parquet persist/merge/read (kind-agnostic)
       systemd/mcp-data.service
-    hamilton/            # research library: catalog of reusable indicators/signals (:8064)
+    quant/               # research library (Hamilton DAG) + backtest engines (:8064)
       server.py          #   FastMCP server (OAuth) + catalog
-      systemd/mcp-hamilton.service
+      systemd/mcp-quant.service
   scripts/
     install-system.sh    # one-time ROOT bootstrap (squid + system units + sudoers)
     new-tool.sh          # stamp a new tool (dir + server stub + unit)

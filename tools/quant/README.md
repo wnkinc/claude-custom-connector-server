@@ -1,10 +1,14 @@
-# tools/hamilton
+# tools/quant
 
-The **research library**: a catalog of engine-agnostic indicators, features, and
-alpha/signals — defined once as plain Python functions, then searched, deduped,
-and reused across backtest/live engines.
+Two halves in one hardened tool: a **research library** — a catalog of
+engine-agnostic indicators, features, and alpha/signals defined once as plain
+Python functions — and the **backtest engines** that consume them. They share one
+process/venv because they're tightly coupled (the engines import the library); the
+data lake stays a separate tool (`tools/data`) because that boundary is just files
+on disk.
 
-[Hamilton](https://github.com/apache/hamilton) is the engine that powers it.
+[Hamilton](https://github.com/apache/hamilton) is the engine that powers the
+library half (it reads the functions and wires them into a DAG).
 
 ## The model in one breath
 
@@ -14,34 +18,37 @@ by matching parameter names to function names, and lets you **query** that graph
 of truth; Hamilton is the thing that connects and inspects them.
 
 ```
-tools/hamilton/  = the tool root (server + readers + systemd unit)
+tools/quant/     = the tool root (server + readers + engines + systemd unit)
   library/       = the pieces (your code, the only thing that grows)
+  engines/       = backtest engines that consume the pieces (vectorbt first)
 Hamilton         = reads the pieces, connects them, answers questions about them
-server.py        = exposes those answers to Claude over MCP
+server.py        = exposes the library + engine surfaces to Claude over MCP
 ```
 
 > Note: `library/` holds **every** layer-1–3 piece — indicators, derived
 > features, and alpha/signals alike. The *kind* of a piece is a tag (see below),
 > not a separate folder.
 
-## What lives here (and what doesn't)
+## What lives here
 
-This tool covers **layers 1–3 only** — the part of the stack where a "piece" is
-just a column in a time-indexed table, so it's genuinely engine-agnostic:
+The tool spans the whole stack, but with a hard internal seam. Layers 1–3 are the
+**engine-agnostic library** — a "piece" is just a column in a time-indexed table.
+Layers 4+ are the **engines** (`engines/`), where logic becomes engine-specific.
 
-| Layer | Lives here? | Why |
+| Layer | Where | Why |
 |---|---|---|
 | 1 Data | references it | consumes the `tools/data` parquet lake |
-| 2 Indicators / Features | ✅ | a function `bars -> column` (math from `pandas-ta`) |
-| 3 Alpha / Signal | ✅ | a function `features -> score column` |
-| 4 Strategy | ❌ → `tools/backtest` | entry/exit logic is engine-specific (event loop) |
-| 5 Portfolio / Sizing | ❌ → `tools/backtest` | engine-specific |
-| 6 Risk | ❌ → `tools/backtest` | engine-specific |
-| 7 Backtest | ❌ → `tools/backtest` | the execution engine |
-| 8 Execution / Live | ❌ → `tools/backtest` | the execution engine |
+| 2 Indicators / Features | `library/` | a function `bars -> column` (math from `pandas-ta`) |
+| 3 Alpha / Signal | `library/` | a function `features -> score column` |
+| 4 Strategy | `engines/<engine>/` | entry/exit logic, expressed in the engine's native form |
+| 5 Portfolio / Sizing | `engines/<engine>/` | engine-specific |
+| 6 Risk | `engines/<engine>/` | engine-specific |
+| 7 Backtest | `engines/<engine>/` | the execution engine (vectorbt first) |
+| 8 Execution / Live | `engines/<engine>/` | the execution engine |
 
-The library tops out at the **signal column**. That column is the clean seam:
-the backtest tool consumes it; this tool never runs a strategy.
+The **signal column is the seam**: the library tops out there, and each engine
+consumes it. The library never runs a strategy; strategies live per-engine so the
+same signal can drive vectorbt, Nautilus, etc. without duplicating indicator math.
 
 ## Indicator vs feature vs alpha = a tag, not a folder
 

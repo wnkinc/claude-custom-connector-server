@@ -1,11 +1,11 @@
 [Unit]
 # Hardened systemd SYSTEM unit template for an mcp-tools server.
-# Placeholders: mcp-hamilton (unit + state dir name), 8064 (loopback MCP port),
-# /home/wes/Documents/mcp-tools/tools/hamilton (tool dir holding server.py and .venv), 8076 (this tool's squid
+# Placeholders: mcp-quant (unit + state dir name), 8064 (loopback MCP port),
+# /home/wes/Documents/mcp-tools/tools/quant (tool dir holding server.py and .venv), 8076 (this tool's squid
 # egress listener), wes (unprivileged run-as user).
 # SYSTEM unit (not --user) so (a) IPAddressDeny/Allow actually enforce the egress
 # wall and (b) it starts at boot. Install via scripts/install-system.sh (sudo once).
-Description=MCP tool: mcp-hamilton (public, Google-OAuth gated via Cloudflare Tunnel)
+Description=MCP tool: mcp-quant (public, Google-OAuth gated via Cloudflare Tunnel)
 After=network-online.target
 Wants=network-online.target
 
@@ -13,24 +13,24 @@ Wants=network-online.target
 Type=simple
 User=wes
 Group=wes
-WorkingDirectory=/home/wes/Documents/mcp-tools/tools/hamilton
+WorkingDirectory=/home/wes/Documents/mcp-tools/tools/quant
 # MCP_PORT is read by main() BEFORE .env loads, so it MUST live here, not in .env.
 Environment=MCP_HOST=127.0.0.1
 Environment=MCP_PORT=8064
 Environment=HOME=/home/wes
 Environment=PATH=/home/wes/.local/bin:/usr/local/bin:/usr/bin:/bin
-# OAuth state stays writable under ProtectHome=read-only via StateDirectory (/var/lib/mcp-hamilton).
-StateDirectory=mcp-hamilton
-Environment=FASTMCP_HOME=%S/mcp-hamilton
+# OAuth state stays writable under ProtectHome=read-only via StateDirectory (/var/lib/mcp-quant).
+StateDirectory=mcp-quant
+Environment=FASTMCP_HOME=%S/mcp-quant
 # numba JIT cache must land somewhere writable: the venv lives in $HOME (read-only under
 # ProtectHome), so pandas_ta's cache=True functions otherwise fail at import with "no
 # locator available for file '.../pandas_ta/utils/_math.py'". Point numba at the
 # StateDirectory. Must be in the UNIT (not .env): pandas_ta is imported before .env loads.
-Environment=NUMBA_CACHE_DIR=%S/mcp-hamilton/numba-cache
+Environment=NUMBA_CACHE_DIR=%S/mcp-quant/numba-cache
 
 # --- L2 egress: all outbound traffic MUST go through the egress proxy ---
 # This tool's per-tool squid listener (:8076) enforces its domain
-# allowlist (security/egress-proxy/allowlist/mcp-hamilton.txt). The IPAddress wall makes
+# allowlist (security/egress-proxy/allowlist/quant.txt). The IPAddress wall makes
 # the proxy the ONLY route off-box; NO_PROXY keeps loopback (guardrail, resolver) direct.
 Environment=HTTPS_PROXY=http://127.0.0.1:8076
 Environment=HTTP_PROXY=http://127.0.0.1:8076
@@ -38,7 +38,7 @@ Environment=NO_PROXY=127.0.0.1,localhost
 IPAddressDeny=any
 IPAddressAllow=127.0.0.1/8
 
-ExecStart=/home/wes/Documents/mcp-tools/tools/hamilton/.venv/bin/python server.py
+ExecStart=/home/wes/Documents/mcp-tools/tools/quant/.venv/bin/python server.py
 Restart=on-failure
 RestartSec=5
 
