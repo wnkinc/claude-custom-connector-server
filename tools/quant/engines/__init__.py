@@ -1,7 +1,9 @@
 """Backtest engines for the quant tool.
 
-Each engine is a subpackage (``vectorbt`` first; nautilus etc. later) that consumes
-the shared OHLCV lake (``engines.lake``) and the Hamilton signal library
-(``catalog.materialize``). Engines share the lake reader but own their strategy /
-entry-exit semantics, expressed in that engine's native form.
+``engines.core`` does the engine-agnostic pre-flight (lake → Hamilton target-position
+series) once and dispatches to an engine by name. Each engine is a subpackage
+(``vectorbt`` vectorized, ``nautilus`` event-driven) exposing ``run(ohlcv, position,
+interval) -> stats``: it consumes the shared position and owns only its native
+simulation. Adding an engine is a new ``run`` + one ``_ENGINES`` entry in ``core`` — no
+new MCP tool. ``engines.lake`` is the shared read-only reader over the data tool's lake.
 """

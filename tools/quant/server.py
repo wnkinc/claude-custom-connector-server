@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from security.serve import serve  # noqa: E402
 
 import catalog  # noqa: E402
-from engines.vectorbt import runner as vbt_runner  # noqa: E402
+from engines import core as engine_core  # noqa: E402
 
 mcp = FastMCP(name="quant")
 
@@ -53,9 +53,10 @@ def backtest_strategies() -> list[dict]:
 
 
 @mcp.tool
-def backtest_vectorbt(
+def backtest(
     symbol: str,
     strategy: str = "mean_reversion",
+    engine: str = "vectorbt",
     source: str = "yfinance",
     namespace: str = "bars",
     interval: str = "1d",
@@ -63,17 +64,23 @@ def backtest_vectorbt(
     end: str | None = None,
     params: dict | None = None,
 ) -> dict:
-    """Backtest a strategy over data ALREADY in the lake, with the vectorbt engine.
+    """Backtest a strategy over data ALREADY in the lake, on the chosen engine.
 
-    Reads OHLCV from the lake (it does not fetch — use the data tool's data-catalog to
-    see what exists and copy its exact symbol/namespace/source/interval), computes the strategy's
-    library signal via the Hamilton DAG, converts it to entries/exits, and returns
-    vectorbt's portfolio stats. The defaults (bars/yfinance/1d daily) match the seeded
-    daily data. Prefer daily 1d: indicator windows (e.g. RSI-14) need ample bars, so
-    sparse monthly data will fail. See backtest_strategies for strategies + params.
+    Reads OHLCV from the lake (it does not fetch — use the data tool's data-catalog to see
+    what exists and copy its exact symbol/namespace/source/interval), runs the strategy's
+    library signal through the Hamilton DAG to a target position, then simulates it.
+
+    engine: "vectorbt" (vectorized, fast — good for sweeps) or "nautilus" (event-driven,
+    realistic execution). The strategy decision is identical across engines; only the
+    fill/accounting differs, so `stats` is engine-native (vectorbt's portfolio stats vs
+    Nautilus's analyzer stats).
+
+    Defaults (vectorbt/bars/yfinance/1d daily) match the seeded data. Prefer daily 1d:
+    indicator windows (e.g. RSI-14) need ample bars, so sparse data will fail. See
+    backtest_strategies for strategies + params.
     """
-    return vbt_runner.run_backtest(
-        symbol, strategy=strategy, namespace=namespace, source=source,
+    return engine_core.run_backtest(
+        symbol, strategy=strategy, engine=engine, namespace=namespace, source=source,
         interval=interval, start=start, end=end, params=params,
     )
 
