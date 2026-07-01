@@ -14,8 +14,8 @@ In the [Google Cloud Console](https://console.cloud.google.com/):
 
 1. **Create / pick a project** (e.g. `mcp-tools`).
 2. **OAuth consent screen:** User type **External**; app name + your emails; scopes
-   `openid` + `.../auth/userinfo.email` (no sensitive scopes → no review). Add every
-   allowed email as a **Test user**; leave status **Testing**.
+   `openid` + `.../auth/userinfo.email` (default scopes; Google verification review is
+   skipped). Add every allowed email as a **Test user**; leave status **Testing**.
 3. **Credentials → Create OAuth client ID:** type **Web application**; redirect URI
    `https://xmcp.secure-agentic-engineering.com/auth/callback`. Copy the **Client ID**
    and **Client secret**.
@@ -55,7 +55,7 @@ docker compose logs -f xmcp        # expect: "OAuth enabled (Google) at https://
 ```
 (Local, auth-off dev instead: `docker compose up --build`.)
 
-## 4. Verify the public endpoint (the #410 check)
+## 4. Verify the public endpoint
 
 ```bash
 curl -s https://xmcp.secure-agentic-engineering.com/.well-known/oauth-authorization-server | head -c 300; echo
@@ -78,16 +78,15 @@ Settings → Connectors → Add custom connector →
 
 - **"Connection issue / server configuration issue" with repeated `invalid_token`** —
   Claude is holding an OAuth token from a *previous* instance of this server (the OAuth
-  store is the `xmcp-state` volume; a fresh volume invalidates old tokens). Remove+re-add
-  the connector is **not** enough: **fully quit and restart the Claude app**, then re-add
-  the connector so it re-registers.
+  store is the `xmcp-state` volume; a fresh volume invalidates old tokens). Fix: **fully
+  quit and restart the Claude app**, then re-add the connector so it re-registers.
 - **"Authorization failed" on web/mobile before any login** — the `WWW-Authenticate`
-  header is missing. Re-run step 4; ensure no Cloudflare Access policy fronts `xmcp.*`
-  (that reintroduces #410).
-- **Google login succeeds but Claude is rejected** — your email isn't in
+  header is missing. Re-run step 4, and keep the hostname serving its own OAuth (leave
+  Cloudflare Access off `xmcp.*`).
+- **Google login succeeds but Claude is rejected** — add your email to
   `MCP_ALLOWED_GOOGLE_EMAILS`. Check `docker compose logs xmcp` for "Rejected Google login".
-- **"Access blocked: app not verified"** — add the email as a **Test user** on the
-  consent screen (Testing mode allows only those).
+- **"Access blocked" (app unverified)** — add the email as a **Test user** on the
+  consent screen (Testing mode allows added Test users).
 - **A real host is blocked** (Google login / `grok_x_search` fail) — the egress wall is
   denying it. Watch `docker compose exec egress tail -f /var/log/squid/access.log`
   (look for `TCP_DENIED`), add the host to `security/egress-proxy/allowlist/x-mcp.txt`,
