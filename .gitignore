@@ -16,3 +16,5 @@ env/
 # Cloudflare tunnel credentials (the ingress secret). Routing config is committed;
 # the creds JSON is injected per-host and must never land in git.
 security/ingress/secrets/
+
+vendor/
