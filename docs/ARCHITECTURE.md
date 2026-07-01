@@ -36,8 +36,7 @@ The same image runs locally (`docker compose up`) and in the cloud — transport
 
 - **One tool per container, own subdomain, isolated.** Each tool is its own image on
   an `internal` network — a bug or bad dep in one can't reach another's credentials or
-  egress. The obvious "one endpoint, all tools" alternative is Cloudflare's MCP Portal,
-  which is the thing broken by #410.
+  egress.
 
 - **No internet except through the egress allowlist (the strongest single control).**
   Each tool sits on an `internal` Docker network with no gateway, so the squid sidecar
