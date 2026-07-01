@@ -7,13 +7,13 @@ Tunnel, with each tool gated by Google OAuth (verified-email allowlist).
 ## The model in one breath
 
 One **portable tool per container**: a FastMCP server that reads its transport and
-security posture from **env**, so the same image runs locally and in the cloud with no
-code fork. Each tool sits on an **internal Docker network with no internet of its own**
-— all egress is forced through a **squid allowlist sidecar** (a bad dep can't
-exfiltrate). A **Cloudflare Tunnel** sidecar fronts them, each on its own subdomain
-(transport only — no Access policy). **Auth lives in the MCP server** (FastMCP Google
-OAuth with a verified-email allowlist), not in Cloudflare, so it travels with the image
-and works uniformly across Claude desktop, web, and mobile.
+security posture from **env**, so one image runs locally and in the cloud unchanged.
+Each tool sits on an **internal Docker network sealed from the internet** — all egress
+goes through a **squid allowlist sidecar**, so a bad dep stays confined to its allowlist.
+A **Cloudflare Tunnel** sidecar fronts them, each on its own subdomain (transport only;
+the server owns auth). **Auth lives in the MCP server** (FastMCP Google OAuth with a
+verified-email allowlist), so it travels with the image and works uniformly across Claude
+desktop, web, and mobile.
 
 ## Layout
 
