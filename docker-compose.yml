@@ -55,10 +55,11 @@ services:
       context: .
       dockerfile: tools/xmcp/Dockerfile
     image: mcp-xmcp
-    ports:
-      # Host port is overridable so the container can run alongside the live systemd
-      # mcp-xmcp (which already holds 8061): XMCP_HOST_PORT=18061 docker compose up
-      - "${XMCP_HOST_PORT:-8061}:8061"
+    # No published host port ON PURPOSE: xmcp is on the `internal` network (the egress
+    # wall), and Docker cannot publish a host port from an internal-only container. Ingress
+    # is a substrate's job -- the cloudflared sidecar in docker-compose.tunnel.yml reaches
+    # it at http://xmcp:8061 over the internal network. To poke it locally without the
+    # tunnel: `docker compose exec xmcp ...` or a throwaway container on mcp-tools_internal.
     environment:
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8061
