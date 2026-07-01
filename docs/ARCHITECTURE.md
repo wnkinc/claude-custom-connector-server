@@ -24,18 +24,15 @@ The same image runs locally (`docker compose up`) and in the cloud — transport
 
 ## Why each choice
 
-- **Auth in the MCP server, not Cloudflare Access.** claude.ai web/mobile connectors
-  require a spec-compliant OAuth 2.1 flow whose `401` carries a `WWW-Authenticate:
-  Bearer resource_metadata="..."` header (RFC 9728 / MCP auth spec). Cloudflare
-  Access's Managed-OAuth MCP portal omits that header
-  ([anthropics/claude-ai-mcp#410](https://github.com/anthropics/claude-ai-mcp/issues/410),
-  closed "not planned"), so web/mobile fail there while Claude Code tolerates it.
-  FastMCP's `OAuthProxy` emits the header + discovery metadata + DCR, so all surfaces
-  work.
+- **Auth in the MCP server, not Cloudflare Access.** Each server runs its own Google
+  OAuth (`FastMCP` `OAuthProxy`) with a verified-email allowlist. Keeping auth in the
+  server rather than at the edge means it travels with the image — the same container
+  authenticates the same way locally or in any cloud — and it works uniformly across
+  Claude desktop, web, and mobile.
 
 - **Tunnel = transport only.** The Cloudflare Tunnel provides TLS, hides the home IP,
-  and exposes no inbound ports. The MCP hostname has **no Access policy** — stacking
-  Access OAuth on top of MCP OAuth double-auths and breaks the connector.
+  and exposes no inbound ports. The MCP hostname has **no Access policy** — the server
+  already does its own OAuth, so an Access layer on top would just double-auth.
 
 - **One tool per container, own subdomain, isolated.** Each tool is its own image on
   an `internal` network — a bug or bad dep in one can't reach another's credentials or

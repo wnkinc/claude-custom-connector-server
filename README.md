@@ -12,9 +12,8 @@ code fork. Each tool sits on an **internal Docker network with no internet of it
 — all egress is forced through a **squid allowlist sidecar** (a bad dep can't
 exfiltrate). A **Cloudflare Tunnel** sidecar fronts them, each on its own subdomain
 (transport only — no Access policy). **Auth lives in the MCP server** (FastMCP Google
-OAuth), not in Cloudflare, because that's the only way the claude.ai web/mobile
-connectors work (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the
-Cloudflare-Access bug this avoids).
+OAuth with a verified-email allowlist), not in Cloudflare, so it travels with the image
+and works uniformly across Claude desktop, web, and mobile.
 
 ## Layout
 
