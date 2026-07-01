@@ -18,10 +18,9 @@ egress sidecar (squid) :3128                  per-tool domain allowlist, default
 api.x.com (read-only bearer, allowlisted ops) + api.x.ai (grok_x_search) + Google OAuth verify
 ```
 
-The same tools also run as per-tool **systemd** units on the hardened box (there the
-egress wall is `HTTPS_PROXY` + `IPAddressDeny=any` + a host squid, instead of the
-container network). Which substrate supplies a tool is an **env** choice, not a code
-change — see [SUBSTRATE.md](SUBSTRATE.md).
+The same image runs locally (`docker compose up`) and in the cloud — transport
+(`http`/`stdio`) and the security posture (auth / approval / guardrail) are read from
+**env**, not baked in, so nothing forks per environment.
 
 ## Why each choice
 
@@ -57,9 +56,8 @@ change — see [SUBSTRATE.md](SUBSTRATE.md).
 
 ## Adding a tool
 
-`scripts/new-tool.sh <name> <port> [subdomain]` stamps `tools/<name>/` (server stub
-wired to `security/serve.py`, `env.example`, systemd unit) + its egress allowlist. To
-run it container-first, also: add a `Dockerfile` (copy an existing tool's) + a hashed
-`requirements.lock`, a service in `docker-compose.yml`, a route in
-`security/ingress/cloudflared.config.yml`, one redirect URI on the shared Google OAuth
-client, and the custom connector in Claude.
+`scripts/new-tool.sh <name> <port>` stamps `tools/<name>/` (server stub wired to
+`security/serve.py`, `env.example`) + its egress allowlist. Then add a `Dockerfile`
+(copy an existing tool's) + a hashed `requirements.lock`, a service in
+`docker-compose.yml`, a route in `security/ingress/cloudflared.config.yml`, one redirect
+URI on the shared Google OAuth client, and the custom connector in Claude.

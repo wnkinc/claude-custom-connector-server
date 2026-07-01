@@ -24,8 +24,8 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
-# Make the repo root importable regardless of CWD (systemd runs us from the tool
-# dir), then load the shared Google-OAuth provider used by every public server.
+# Make the repo root importable regardless of CWD (we run from the tool dir), then
+# load the shared Google-OAuth provider used by every public server.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from security.serve import serve  # noqa: E402
 

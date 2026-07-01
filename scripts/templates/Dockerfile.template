@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1
+# Portable substrate for the __NAME__ tool (stamped by scripts/new-tool.sh).
+# BUILD CONTEXT = repo root, because the tool imports the shared ./security package:
+#   docker build -f tools/__NAME__/Dockerfile -t mcp-__NAME__ .
+ARG BASE=public.ecr.aws/amazonlinux/amazonlinux@sha256:a450a74bfebfa936e7106d79c8b4b4dd0ca891c790513f84624da02a0e5531db
+
+# --- builder: resolve the venv from the hashed lock (tamper-evident install) ----------
+FROM ${BASE} AS builder
+RUN dnf install -y python3.12 python3.12-pip python3.12-devel gcc && dnf clean all
+WORKDIR /app
+COPY tools/__NAME__/requirements.lock ./requirements.lock
+RUN python3.12 -m venv /app/.venv \
+    && /app/.venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /app/.venv/bin/pip install --no-cache-dir --require-hashes -r requirements.lock
+
+# --- runtime: slim, non-root ----------------------------------------------------------
+FROM ${BASE}
+RUN dnf install -y python3.12 procps-ng shadow-utils && dnf clean all \
+    && groupadd --system app && useradd --system --gid app --home-dir /app app
+WORKDIR /app
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    MCP_HOST=0.0.0.0 \
+    MCP_PORT=__PORT__ \
+    MCP_TRANSPORT=http \
+    # Writable state carve-out (OAuth store, caches). HOME points here too so any
+    # ~/.cache or ~/.config writes land somewhere the non-root user owns.
+    HOME=/app/state \
+    FASTMCP_HOME=/app/state
+
+COPY --from=builder /app/.venv /app/.venv
+COPY security/ /app/security/
+COPY tools/__NAME__/ /app/tools/__NAME__/
+RUN mkdir -p /app/state && chown -R app:app /app/state
+
+USER app
+WORKDIR /app/tools/__NAME__
+EXPOSE __PORT__
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import os,socket; socket.create_connection(('127.0.0.1', int(os.environ.get('MCP_PORT','__PORT__'))), timeout=3).close()" || exit 1
+ENTRYPOINT ["python", "server.py"]

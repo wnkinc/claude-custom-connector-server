@@ -42,9 +42,8 @@ Confirm the route for this host in `security/ingress/cloudflared.config.yml`
 
 ## 3. Bring up the public stack
 
-Only one tunnel connector may run — stop any host one first:
+Only one connector may run for a tunnel — stop any existing host `cloudflared` first:
 ```bash
-systemctl --user disable --now cloudflared-openclaw   # if it exists
 X_BEARER_TOKEN=... docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d --build
 ```
 This starts the tools + guardrail + egress wall + the Cloudflare ingress, with auth
@@ -77,10 +76,10 @@ Settings → Connectors → Add custom connector →
 ## Troubleshooting
 
 - **"Connection issue / server configuration issue" with repeated `invalid_token`** —
-  Claude is holding an OAuth token from a *previous* instance of this server (e.g. after
-  moving from systemd to the container, whose OAuth store is a fresh `xmcp-state`
-  volume). Remove+re-add the connector is **not** enough: **fully quit and restart the
-  Claude app**, then re-add the connector so it re-registers.
+  Claude is holding an OAuth token from a *previous* instance of this server (the OAuth
+  store is the `xmcp-state` volume; a fresh volume invalidates old tokens). Remove+re-add
+  the connector is **not** enough: **fully quit and restart the Claude app**, then re-add
+  the connector so it re-registers.
 - **"Authorization failed" on web/mobile before any login** — the `WWW-Authenticate`
   header is missing. Re-run step 4; ensure no Cloudflare Access policy fronts `xmcp.*`
   (that reintroduces #410).
@@ -93,6 +92,3 @@ Settings → Connectors → Add custom connector →
   (look for `TCP_DENIED`), add the host to `security/egress-proxy/allowlist/x-mcp.txt`,
   and `docker compose restart egress`.
 - **Logs:** `docker compose logs -f xmcp` (or `guardrail` / `egress` / `cloudflared`).
-
-Hardened home-box (systemd) path instead of containers: see
-[SUBSTRATE.md](SUBSTRATE.md) and `sudo scripts/install-system.sh`.

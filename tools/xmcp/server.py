@@ -18,8 +18,8 @@ from pathlib import Path
 import httpx
 from fastmcp import FastMCP
 
-# Make the repo root importable regardless of the process CWD (systemd runs us from
-# the tool dir), then pull in the shared serve() helper.
+# Make the repo root importable regardless of the process CWD (we run from the tool
+# dir), then pull in the shared serve() helper.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from security.serve import serve  # noqa: E402
 

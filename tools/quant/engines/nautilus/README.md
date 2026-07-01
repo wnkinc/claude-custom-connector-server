@@ -105,7 +105,7 @@ around the stats (`engine`, `symbol`, `strategy`, …) is added uniformly by
 
 ## Deployment note
 
-The live `mcp-quant` unit runs on a hardened, read-only-FS systemd unit. Nautilus here
-runs in-memory (`bypass_logging=True`, no persistence catalog), so it doesn't need disk —
-but if a future change makes it want a writable scratch/cache path, it'll need a
-`StateDirectory` carve-out like numba's JIT cache already has.
+The live `mcp-quant` container runs on a read-only rootfs (non-root). Nautilus here runs
+in-memory (`bypass_logging=True`, no persistence catalog), so it doesn't need disk — but
+if a future change makes it want a writable scratch/cache path, point it at the
+`/app/state` volume like numba's JIT cache (`NUMBA_CACHE_DIR`) already does.

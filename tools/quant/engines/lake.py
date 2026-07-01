@@ -5,10 +5,10 @@ The data tool writes parquet under ``<DATA_ROOT>/<namespace>/<source>/<symbol>/
 This module only *reads*; it never fetches. If the data isn't there it raises with
 guidance to run ``data-ingest`` (the data tool) first.
 
-Cross-tool the lake is shared via ``DATA_ROOT``: the data tool writes it under its
-systemd StateDirectory (``/var/lib/mcp-data/data``); the quant unit mounts that dir
-read-only and points ``DATA_ROOT`` at it. The dev default below is the data tool's
-live lake so a hand-run server still finds locally-ingested data.
+Cross-tool the lake is shared via ``DATA_ROOT``: the data tool writes its parquet lake
+to ``DATA_ROOT`` (``/app/state/data`` in the container); point quant's ``DATA_ROOT`` at
+the same location (a shared volume) to read it. The dev default below lets a hand-run
+server find a locally-ingested lake.
 """
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pandas as pd
 
-# Dev default = the data tool's live StateDirectory lake; DATA_ROOT overrides.
-_DEFAULT_ROOT = Path("/var/lib/mcp-data/data")
+# Dev default = the data tool's container lake path; DATA_ROOT overrides.
+_DEFAULT_ROOT = Path("/app/state/data")
 _OHLCV = ["open", "high", "low", "close", "volume"]
 
 

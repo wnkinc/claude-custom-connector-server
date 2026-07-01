@@ -1,30 +1,32 @@
 #!/usr/bin/env bash
-# Stamp out a new mcp-tools server from the shared template.
+# Stamp a new container-first mcp-tools server.
 #
-#   scripts/new-tool.sh <name> <port> [subdomain] [proxy_port]
-#   scripts/new-tool.sh weather 8062 weather.secure-agentic-engineering.com
+#   scripts/new-tool.sh <name> <port> [subdomain]
+#   scripts/new-tool.sh weather 8065
 #
-# Creates tools/<name>/ with a minimal FastMCP server pre-wired to the shared
-# serve() helper (security/serve.py: OAuth + optional guardrail/approval), an
-# env.example, a hardened SYSTEM systemd unit
-# (egress-walled), and a per-tool egress allowlist stub. It does NOT touch
-# Cloudflare, systemd, or /etc -- it prints the exact follow-up commands.
+# Creates tools/<name>/ (FastMCP server wired to the shared serve() helper, env.example,
+# Dockerfile) + a per-tool egress allowlist, and inserts a service + state volume into
+# docker-compose.yml. It does NOT touch Cloudflare, secrets, or the egress/ingress
+# configs -- it prints the exact follow-up edits.
 set -euo pipefail
 
-NAME="${1:?usage: new-tool.sh <name> <port> [subdomain] [proxy_port]}"
-PORT="${2:?usage: new-tool.sh <name> <port> [subdomain] [proxy_port]}"
+NAME="${1:?usage: new-tool.sh <name> <port> [subdomain]}"
+PORT="${2:?usage: new-tool.sh <name> <port> [subdomain]}"
 SUBDOMAIN="${3:-${NAME}.secure-agentic-engineering.com}"
-# Per-tool egress-proxy listener. Convention: MCP port (:806x) + 12 -> proxy (:807x).
-PROXY_PORT="${4:-$((PORT + 12))}"
-RUN_USER="$(id -un)"
 ACL="${NAME//-/_}"   # squid acl names: hyphens -> underscores
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIR="$ROOT/tools/$NAME"
-UNIT_NAME="mcp-$NAME"
+SQUID="$ROOT/security/egress-proxy/squid.compose.conf"
+COMPOSE="$ROOT/docker-compose.yml"
 
 [ -e "$DIR" ] && { echo "ERROR: $DIR already exists" >&2; exit 1; }
-mkdir -p "$DIR/systemd"
+
+# Next egress listener port = highest http_port in the compose squid conf + 1.
+EPORT="$(grep -oE '^http_port +[0-9]+' "$SQUID" | grep -oE '[0-9]+' | sort -n | tail -1)"
+EPORT="$((EPORT + 1))"
+
+mkdir -p "$DIR"
 
 cat > "$DIR/server.py" <<PY
 import os
@@ -59,13 +61,11 @@ if __name__ == "__main__":
 PY
 
 cat > "$DIR/requirements.txt" <<'TXT'
-fastmcp
+fastmcp==3.4.2
 TXT
 
 cat > "$DIR/env.example" <<ENV
-MCP_HOST=127.0.0.1
-MCP_PORT=${PORT}
-
+# Container sets MCP_HOST/MCP_PORT/MCP_TRANSPORT; this file is secrets + posture only.
 MCP_AUTH_ENABLED=0
 MCP_PUBLIC_URL=https://${SUBDOMAIN}
 GOOGLE_CLIENT_ID=
@@ -73,39 +73,81 @@ GOOGLE_CLIENT_SECRET=
 MCP_ALLOWED_GOOGLE_EMAILS=
 ENV
 
-sed -e "s|__NAME__|${UNIT_NAME}|g" \
-    -e "s|__TOOL__|${NAME}|g" \
-    -e "s|__PORT__|${PORT}|g" \
-    -e "s|__DIR__|${DIR}|g" \
-    -e "s|__PROXY_PORT__|${PROXY_PORT}|g" \
-    -e "s|__USER__|${RUN_USER}|g" \
-    "$ROOT/scripts/templates/unit.template" > "$DIR/systemd/${UNIT_NAME}.service"
+sed -e "s|__NAME__|${NAME}|g" -e "s|__PORT__|${PORT}|g" \
+    "$ROOT/scripts/templates/Dockerfile.template" > "$DIR/Dockerfile"
 
 # Per-tool egress allowlist stub (locked down by default -- add only what it needs).
 ALLOW="$ROOT/security/egress-proxy/allowlist/${NAME}.txt"
-mkdir -p "$(dirname "$ALLOW")"
 cat > "$ALLOW" <<TXT
 # ${NAME} egress allowlist (squid dstdomain). One host per line; leading dot = subdomains.
 # Add ONLY hosts this tool must reach (plus the Google OAuth hosts if it serves Claude:
 # accounts.google.com, oauth2.googleapis.com, www.googleapis.com). Discover misses from
-# squid TCP_DENIED in /var/log/squid/access.log.
+# squid TCP_DENIED in the egress log (docker compose exec egress tail /var/log/squid/access.log).
 TXT
 
-cat <<DONE
-Created tools/${NAME}/ (MCP :${PORT}, proxy :${PROXY_PORT}, subdomain ${SUBDOMAIN}).
+# Insert the compose service + state volume into docker-compose.yml.
+python3 - "$COMPOSE" "$NAME" "$EPORT" <<'PY'
+import sys
+path, name, eport = sys.argv[1], sys.argv[2], sys.argv[3]
+src = open(path).read()
+if f"\n  {name}:\n" in src:
+    print(f"  (docker-compose.yml already has a {name} service; skipped)"); sys.exit(0)
+service = f"""  {name}:
+    build:
+      context: .
+      dockerfile: tools/{name}/Dockerfile
+    image: mcp-{name}
+    restart: unless-stopped
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_TRANSPORT: http
+      MCP_AUTH_ENABLED: "0"
+      HTTPS_PROXY: http://egress:{eport}
+      HTTP_PROXY: http://egress:{eport}
+      NO_PROXY: localhost,127.0.0.1
+    volumes:
+      - {name}-state:/app/state
+    networks:
+      - internal
+    depends_on:
+      egress:
+        condition: service_started
 
-Next steps:
-  1. python -m venv "$DIR/.venv" && "$DIR/.venv/bin/pip" install -r "$DIR/requirements.txt"
-  2. cp "$DIR/env.example" "$DIR/.env"   # fill Google creds + email allowlist; set MCP_AUTH_ENABLED=1
-  3. Add https://${SUBDOMAIN}/auth/callback to your Google OAuth client's Authorized redirect URIs.
-  4. Egress: put this tool's allowed hosts in security/egress-proxy/allowlist/${NAME}.txt,
-     then add to security/egress-proxy/squid.conf (the http_access line BEFORE 'deny all'):
-         http_port 127.0.0.1:${PROXY_PORT} name=${NAME}
+"""
+if "\nnetworks:\n" not in src or "\nvolumes:\n" not in src:
+    print("  (couldn't find networks:/volumes: anchors; add the service manually)"); sys.exit(0)
+out, did_svc, did_vol = [], False, False
+for line in src.splitlines(keepends=True):
+    if not did_svc and line.startswith("networks:"):
+        out.append(service); did_svc = True
+    out.append(line)
+    if not did_vol and line.startswith("volumes:"):
+        out.append(f"  {name}-state:\n"); did_vol = True
+open(path, "w").write("".join(out))
+print("  inserted service + state volume into docker-compose.yml")
+PY
+
+cat <<DONE
+Created tools/${NAME}/ (server.py, requirements.txt, env.example, Dockerfile) + egress
+allowlist, and wired a compose service (MCP :${PORT}, egress via squid :${EPORT}).
+
+Finish wiring it (all in-repo):
+  1. Lock deps:  uv pip compile tools/${NAME}/requirements.txt --generate-hashes \\
+                   --python-version 3.12 -o tools/${NAME}/requirements.lock
+  2. Egress: add a listener to security/egress-proxy/squid.compose.conf (before 'deny all'):
+         http_port ${EPORT} name=${NAME}
          acl port_${ACL} myportname ${NAME}
          acl dom_${ACL}  dstdomain "/etc/squid/allowlist/${NAME}.txt"
          http_access allow port_${ACL} CONNECT dom_${ACL}
-  5. Install (one sudo -- system unit + allowlist + squid reload + enable at boot):
-     sudo scripts/install-system.sh
-  6. scripts/add-tunnel-route.sh ${SUBDOMAIN} ${PORT}
-  7. Add the custom connector https://${SUBDOMAIN}/mcp in Claude (desktop + web).
+     and put this tool's allowed hosts in security/egress-proxy/allowlist/${NAME}.txt
+  3. Ingress: add a route to security/ingress/cloudflared.config.yml (above the 404):
+         - hostname: ${SUBDOMAIN}
+           service: http://${NAME}:${PORT}
+     and, for auth-on public serving, add ${NAME} to docker-compose.tunnel.yml (env_file
+     tools/${NAME}/.env + MCP_AUTH_ENABLED: "1").
+  4. Secrets: cp tools/${NAME}/env.example tools/${NAME}/.env  (fill Google creds; set
+     MCP_AUTH_ENABLED=1 for public), and add https://${SUBDOMAIN}/auth/callback to the
+     shared Google OAuth client's Authorized redirect URIs.
+  5. Bring it up:  docker compose up -d --build ${NAME}
+  6. Add the custom connector https://${SUBDOMAIN}/mcp in Claude (desktop + web).
 DONE

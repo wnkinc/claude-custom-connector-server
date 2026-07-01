@@ -1,20 +1,21 @@
 # =================================================================================
-# The "two substrates" picture (docs/SUBSTRATE.md): the x-mcp TOOL as a slim,
-# ML-free container + the GUARDRAIL as its own sidecar carrying the heavy screener.
-# The tool reaches the sidecar over the private compose network at http://guardrail:8071;
-# neither bakes secrets -- env is injected here, the same image runs unchanged in cloud.
+# The local stack: each TOOL as a slim, ML-free container behind an egress wall, plus
+# the GUARDRAIL as its own sidecar carrying the heavy screener. Tools reach the sidecar
+# over the private compose network at http://guardrail:8071; nothing bakes secrets --
+# env is injected here, and the same images run unchanged in the cloud.
 #
 #   X_BEARER_TOKEN=... docker compose up --build
 #
 # Security POSTURE is chosen here by env, not in code (serve() reads it at startup):
-# this local compose runs auth OFF (no tunnel/OAuth) but guardrail ON, to exercise the
-# tool->sidecar screening path. A public deploy would flip MCP_AUTH_ENABLED on.
+# this base file runs auth OFF (local dev) but guardrail ON, to exercise the
+# tool->sidecar screening path. The docker-compose.tunnel.yml overlay is the public
+# deploy (auth on + the Cloudflare ingress).
 # =================================================================================
 services:
-  # --- EGRESS wall (THREAT-MODEL L2): the container idiom for the systemd
-  # IPAddressDeny=any + HTTPS_PROXY combo. The tool sits on the `internal` network
-  # (no gateway to the internet); this squid sidecar is its only peer with an `edge`
-  # leg, so it is the sole route off-box, enforcing a CONNECT-only domain allowlist.
+  # --- EGRESS wall (THREAT-MODEL L2): a hard outbound wall. The tool sits on the
+  # `internal` network (no gateway to the internet); this squid sidecar is its only peer
+  # with an `edge` leg, so it is the sole route off-box, enforcing a CONNECT-only domain
+  # allowlist. A dep that ignores HTTPS_PROXY simply has nowhere to dial.
   egress:
     image: ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029  # ubuntu/squid:latest, pin by digest (dependabot bumps)
     restart: unless-stopped
@@ -66,7 +67,7 @@ services:
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8061
       MCP_TRANSPORT: http
-      # --- security posture for THIS substrate (see the table in docs/SUBSTRATE.md) ---
+      # --- security posture for the local deploy (the tunnel overlay flips these on) ---
       MCP_AUTH_ENABLED: "0"          # local compose: no Cloudflare tunnel / OAuth in front
       MCP_REQUIRE_APPROVAL: "0"      # out-of-band human approval is a tunnel/Claude concern
       MCP_UNTRUSTED_OUTPUT: "1"      # screen X content -> promise honored by the sidecar below

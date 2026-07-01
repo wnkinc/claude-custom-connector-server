@@ -76,11 +76,11 @@ cp env.example .env                   # set TIINGO_API_KEY (+ Google creds for p
 .venv/bin/python -m pytest            # tests (no network)
 ```
 
-OpenBB code-gens its `obb` accessor at import; on the read-only hardened unit it must be
-prebuilt now and frozen (`OPENBB_AUTO_BUILD=false`). Rerun the prebuild only after
-adding/removing an extension. To publish: allowlist hosts in
-`security/egress-proxy/allowlist/data.txt`, then `sudo scripts/install-system.sh` +
-`scripts/add-tunnel-route.sh data.secure-agentic-engineering.com 8062`.
+OpenBB code-gens its `obb` accessor at import; the image prebuilds it at build time and
+freezes it (`OPENBB_AUTO_BUILD=false`) so it never rebuilds on the read-only rootfs.
+Rerun the prebuild only after adding/removing an extension. To publish: allowlist hosts
+in `security/egress-proxy/allowlist/data.txt` and add a route in
+`security/ingress/cloudflared.config.yml`, then `docker compose up -d --build data`.
 
 ## Env vars
 
@@ -88,11 +88,11 @@ adding/removing an extension. To publish: allowlist hosts in
 |---|---|---|
 | `TIINGO_API_KEY` | _(empty)_ | **required** — Tiingo is the default provider; empty → ingest fails |
 | `DATABENTO_API_KEY` | _(empty)_ | optional — only for `equity-ingest source="databento"` |
-| `MCP_PORT` | `8062` | loopback MCP port |
+| `MCP_PORT` | `8062` | MCP port |
 | `MCP_AUTH_ENABLED` | `0` | `1` = require Google OAuth (public serving) |
-| `DATA_ROOT` | `<tool>/var/data` | parquet lake root (StateDirectory on the unit) |
-| `OPENBB_AUTO_BUILD` | `false` (unit) | freeze the prebuilt accessor; never rebuild at import |
-| `HOME` | StateDirectory (unit) | OpenBB writes `$HOME/.openbb_platform`; must be writable |
+| `DATA_ROOT` | `/app/state/data` | parquet lake root (writable state volume) |
+| `OPENBB_AUTO_BUILD` | `false` | freeze the prebuilt accessor; never rebuild at import |
+| `HOME` | `/app/state` | OpenBB writes `$HOME/.openbb_platform`; must be writable |
 
 ## Egress
 

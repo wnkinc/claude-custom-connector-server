@@ -18,7 +18,7 @@ by matching parameter names to function names, and lets you **query** that graph
 of truth; Hamilton is the thing that connects and inspects them.
 
 ```
-tools/quant/     = the tool root (server + readers + engines + systemd unit)
+tools/quant/     = the tool root (server + readers + engines + Dockerfile)
   library/       = the pieces (your code, the only thing that grows)
   engines/       = backtest engines that consume the pieces (vectorbt first)
 Hamilton         = reads the pieces, connects them, answers questions about them

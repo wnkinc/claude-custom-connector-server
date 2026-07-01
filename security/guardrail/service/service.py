@@ -113,8 +113,8 @@ def scan(req: ScanRequest) -> ScanResponse:
 def main() -> None:
     import uvicorn
 
-    # Default loopback keeps the systemd unit unchanged; a container sidecar sets
-    # GUARDRAIL_HOST=0.0.0.0 so the tool container can reach it over the compose network.
+    # Default loopback for local runs; the container sidecar sets GUARDRAIL_HOST=0.0.0.0
+    # so the tool containers can reach it over the compose network.
     uvicorn.run(
         app,
         host=os.environ.get("GUARDRAIL_HOST", "127.0.0.1"),

@@ -100,11 +100,11 @@ def serve(
     """
     host = host or os.getenv("MCP_HOST", "127.0.0.1")
 
-    # SECURITY POSTURE: each layer's default is this tool's serve(...) arg; a substrate
-    # may flip it by env (docs SUBSTRATE matrix). Auth is already env-gated one layer
-    # down (build_oauth_provider reads MCP_AUTH_ENABLED); these bring approval + guardrail
-    # to the same maturity, so the whole posture is one env-readable table. Flipping
-    # MCP_UNTRUSTED_OUTPUT on is a promise the substrate must honor: GUARDRAIL_URL has to
+    # SECURITY POSTURE: each layer's default is this tool's serve(...) arg; a deploy
+    # may flip it by env. Auth is already env-gated one layer down (build_oauth_provider
+    # reads MCP_AUTH_ENABLED); these bring approval + guardrail to the same maturity, so
+    # the whole posture is one env-readable table. Flipping MCP_UNTRUSTED_OUTPUT on is a
+    # promise the deploy must honor: GUARDRAIL_URL has to
     # resolve to a running screener or every call fails closed at the middleware.
     require_approval = _env_override("MCP_REQUIRE_APPROVAL", require_approval)
     untrusted_output = _env_override("MCP_UNTRUSTED_OUTPUT", untrusted_output)
@@ -128,10 +128,9 @@ def serve(
         mcp.auth = auth
 
     # RUNTIME SELECTOR: the transport is chosen by env at startup, not baked in, so the
-    # SAME tool rides every substrate (see docs SUBSTRATE matrix). Default "http" keeps
-    # the hardened-host systemd deploy byte-for-byte unchanged; a desktop/uvx substrate
-    # sets MCP_TRANSPORT=stdio (host/port then irrelevant). Fail closed on typos rather
-    # than silently picking a transport the operator didn't ask for.
+    # same image runs anywhere. Default "http" is the container/server deploy; a desktop
+    # substrate sets MCP_TRANSPORT=stdio (host/port then irrelevant). Fail closed on typos
+    # rather than silently picking a transport the operator didn't ask for.
     transport = os.getenv("MCP_TRANSPORT", "http").strip().lower()
     if transport == "stdio":
         mcp.run(transport="stdio")
