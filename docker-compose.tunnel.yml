@@ -1,0 +1,32 @@
+# PUBLIC overlay: adds the Cloudflare tunnel ingress and flips the tool to its public
+# security posture. Layer it on top of the base (local-demo) compose:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d
+#
+# The base file is the local demo (auth off, host port published). This overlay makes it
+# the public deploy: OAuth + approval + guardrail all ON, ingress via the tunnel. Same
+# images, different substrate -- the whole difference is env + which sidecars run.
+services:
+  cloudflared:
+    image: cloudflare/cloudflared@sha256:6d91c121b803126f7a5344005d17a9324788fc09d305b6e2560ec6040a7ae283  # cloudflare/cloudflared:latest, pin by digest
+    command: tunnel --config /etc/cloudflared/config.yml run
+    restart: unless-stopped
+    volumes:
+      - ./security/ingress/cloudflared.config.yml:/etc/cloudflared/config.yml:ro
+      - ./security/ingress/secrets/creds.json:/etc/cloudflared/creds.json:ro
+    networks:
+      - internal   # forwards to http://xmcp:8061 over the private network
+      - edge       # dials out to the Cloudflare edge
+    depends_on:
+      xmcp:
+        condition: service_healthy
+
+  xmcp:
+    # Bring the tool's real secrets (Google OAuth client, allowed emails, bearer) from
+    # its .env; the explicit posture below overrides the base file's local-demo "off".
+    env_file:
+      - tools/xmcp/.env
+    environment:
+      MCP_AUTH_ENABLED: "1"       # public: Google OAuth on (overrides base "0")
+      MCP_REQUIRE_APPROVAL: "1"   # out-of-band human approval on
+      MCP_UNTRUSTED_OUTPUT: "1"   # guardrail screening on
