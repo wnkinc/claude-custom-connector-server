@@ -2,13 +2,15 @@
 
 ```
 docker-compose.yml         # the stack: tools + guardrail + egress sidecars (local, auth off)
-docker-compose.tunnel.yml  # public overlay: adds the Cloudflare ingress + auth-on posture
+docker-compose.tunnel.yml  # public overlay: Cloudflare ingress routes + auth-on posture
+env.example                # deployment identity (MCP_DOMAIN, TUNNEL_ID) -> cp to .env;
+                           #   compose interpolates it into the tunnel overlay
 security/                  # shared plumbing, imported by every tool
   serve.py                 #   serve(mcp, ...): env-selects transport + security posture, runs it
   auth.py                  #   Google OAuth provider (email allowlist, fail-closed)
   approval/                #   out-of-band human-in-the-loop approval gate
   egress-proxy/            #   squid egress allowlist (per-tool domains, default-deny)
-  ingress/                 #   Cloudflare tunnel routing (creds injected, gitignored)
+  ingress/                 #   tunnel creds staging (gitignored; routing lives in the overlay)
   guardrail/service/       #   standalone LlamaFirewall output-screen service (own sidecar)
   eval/                    #   garak red-team harness
 tools/                     # one tool per dir: server.py + Dockerfile + requirements.lock

@@ -12,10 +12,16 @@ set -euo pipefail
 
 NAME="${1:?usage: new-tool.sh <name> <port> [subdomain]}"
 PORT="${2:?usage: new-tool.sh <name> <port> [subdomain]}"
-SUBDOMAIN="${3:-${NAME}.secure-agentic-engineering.com}"
 ACL="${NAME//-/_}"   # squid acl names: hyphens -> underscores
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Default subdomain = <name>.<MCP_DOMAIN>, from the environment or the root .env
+# (the same deployment-identity file the compose stack interpolates).
+if [ -z "${MCP_DOMAIN:-}" ] && [ -f "$ROOT/.env" ]; then
+  MCP_DOMAIN="$(grep -E '^MCP_DOMAIN=' "$ROOT/.env" | tail -1 | cut -d= -f2-)"
+fi
+SUBDOMAIN="${3:-${NAME}.${MCP_DOMAIN:-example.com}}"
 DIR="$ROOT/tools/$NAME"
 SQUID="$ROOT/security/egress-proxy/squid.compose.conf"
 COMPOSE="$ROOT/docker-compose.yml"
@@ -67,7 +73,9 @@ TXT
 cat > "$DIR/env.example" <<ENV
 # Container sets MCP_HOST/MCP_PORT/MCP_TRANSPORT; this file is secrets + posture only.
 MCP_AUTH_ENABLED=0
-MCP_PUBLIC_URL=https://${SUBDOMAIN}
+# MCP_PUBLIC_URL is stamped by the tunnel overlay from the root .env's MCP_DOMAIN;
+# set it here only when running outside compose.
+#MCP_PUBLIC_URL=https://${SUBDOMAIN}
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 MCP_ALLOWED_GOOGLE_EMAILS=
@@ -140,11 +148,15 @@ Finish wiring it (all in-repo):
          acl dom_${ACL}  dstdomain "/etc/squid/allowlist/${NAME}.txt"
          http_access allow port_${ACL} CONNECT dom_${ACL}
      and put this tool's allowed hosts in security/egress-proxy/allowlist/${NAME}.txt
-  3. Ingress: add a route to security/ingress/cloudflared.config.yml (above the 404):
-         - hostname: ${SUBDOMAIN}
+  3. Ingress: in docker-compose.tunnel.yml add a route to the cloudflared config
+     (the configs: block, above the 404):
+         - hostname: ${NAME}.\${MCP_DOMAIN}
            service: http://${NAME}:${PORT}
-     and, for auth-on public serving, add ${NAME} to docker-compose.tunnel.yml (env_file
-     tools/${NAME}/.env + MCP_AUTH_ENABLED: "1").
+     and a service entry flipping its public posture:
+         ${NAME}:
+           environment:
+             MCP_AUTH_ENABLED: "1"
+             MCP_PUBLIC_URL: https://${NAME}.\${MCP_DOMAIN}
   4. Secrets: cp tools/${NAME}/env.example tools/${NAME}/.env  (fill Google creds; set
      MCP_AUTH_ENABLED=1 for public), and add https://${SUBDOMAIN}/auth/callback to the
      shared Google OAuth client's Authorized redirect URIs.

@@ -70,5 +70,10 @@ jobs:
       - run: for t in xmcp data lean; do touch tools/$t/.env; done
       - name: validate local posture
         run: docker compose config -q
+      # The tunnel overlay requires the deployment identity (root .env); validate
+      # with the committed template's placeholder values.
       - name: validate public (tunnel) posture
-        run: docker compose -f docker-compose.yml -f docker-compose.tunnel.yml config -q
+        run: |
+          cp env.example .env
+          echo "TUNNEL_ID=00000000-0000-0000-0000-000000000000" >> .env
+          docker compose -f docker-compose.yml -f docker-compose.tunnel.yml config -q
