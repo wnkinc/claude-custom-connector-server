@@ -3,7 +3,13 @@
 # guardrail as its own sidecar. Secrets come from each tool's .env; the same images
 # run unchanged in the cloud.
 #
+#   cp env.example .env       # pick your tools: COMPOSE_PROFILES=xmcp,data,...
 #   docker compose up --build
+#
+# Every tool carries a compose profile named after itself; only the tools listed in
+# COMPOSE_PROFILES (root .env, or --profile flags) are built and started, so nobody
+# pulls a tool's image — lean's is 13GB — without opting in. The egress wall and
+# guardrail carry no profile: they are the shared substrate and always run.
 #
 # Security posture is chosen by env, not code (serve() reads it at startup): this base
 # file runs auth off (local dev) but the guardrail on. The docker-compose.tunnel.yml
@@ -53,9 +59,13 @@ services:
       context: .   # repo root, so the image can COPY the shared ./security package
       dockerfile: tools/xmcp/Dockerfile
     image: mcp-xmcp
+    profiles: ["xmcp"]
     restart: unless-stopped
     env_file:
-      - tools/xmcp/.env       # the tool's secrets
+      # The tool's secrets. required: false so a tool you haven't enabled (or filled
+      # in) never blocks `up`; an ACTIVE tool missing its secrets fails loudly itself.
+      - path: tools/xmcp/.env
+        required: false
     # No published host port: the tool is on the internal network (the egress wall), which
     # can't publish one. Ingress is the tunnel's job; to reach it locally use
     # `docker compose exec` or a container on mcp-tools_internal.
@@ -92,9 +102,11 @@ services:
       context: .
       dockerfile: tools/data/Dockerfile
     image: mcp-data
+    profiles: ["data"]
     restart: unless-stopped
     env_file:
-      - tools/data/.env
+      - path: tools/data/.env
+        required: false
     environment:
       MCP_HOST: 0.0.0.0
       MCP_TRANSPORT: http
@@ -118,9 +130,11 @@ services:
       context: .
       dockerfile: tools/lean/Dockerfile
     image: mcp-lean
+    profiles: ["lean"]
     restart: unless-stopped
     env_file:
-      - tools/lean/.env
+      - path: tools/lean/.env
+        required: false
     environment:
       MCP_HOST: 0.0.0.0
       MCP_TRANSPORT: http

@@ -105,7 +105,11 @@ service = f"""  {name}:
       context: .
       dockerfile: tools/{name}/Dockerfile
     image: mcp-{name}
+    profiles: ["{name}"]   # opt-in: runs only when listed in COMPOSE_PROFILES (root .env)
     restart: unless-stopped
+    env_file:
+      - path: tools/{name}/.env
+        required: false
     environment:
       MCP_HOST: 0.0.0.0
       MCP_TRANSPORT: http
@@ -160,6 +164,10 @@ Finish wiring it (all in-repo):
   4. Secrets: cp tools/${NAME}/env.example tools/${NAME}/.env  (fill Google creds; set
      MCP_AUTH_ENABLED=1 for public), and add https://${SUBDOMAIN}/auth/callback to the
      shared Google OAuth client's Authorized redirect URIs.
-  5. Bring it up:  docker compose up -d --build ${NAME}
-  6. Add the custom connector https://${SUBDOMAIN}/mcp in Claude (desktop + web).
+  5. Enable it: add ${NAME} to COMPOSE_PROFILES in the root .env (and in env.example's
+     'Available:' list so downstream deployers can opt in).
+  6. Bring it up:  docker compose up -d --build ${NAME}
+     (naming the service auto-enables its profile for this command only; step 5 is what
+     includes it in a plain 'up')
+  7. Add the custom connector https://${SUBDOMAIN}/mcp in Claude (desktop + web).
 DONE
