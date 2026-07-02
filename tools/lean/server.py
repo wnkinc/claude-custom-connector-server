@@ -9,9 +9,9 @@ launching Docker containers, which a walled container must not do.
 
 Runs INSIDE the pinned quantconnect/lean image (see Dockerfile), so the engine,
 its miniconda Python, and the sample data under /Lean/Data are all present. Each
-run gets a folder under BACKTESTS (lean-cli's backtests/<timestamp>/ convention,
-rooted in the tool's state volume): the algorithm, the config, the engine log, and
-the results JSON.
+run gets a folder at BACKTESTS/<project>/<id>/ (lean-cli's
+<project>/backtests/<timestamp>/ convention, rooted in the tool's state volume):
+the algorithm, the config, the engine log, and the results JSON.
 """
 
 import json
@@ -96,15 +96,19 @@ def _tail(path: Path, lines: int = LOG_TAIL_LINES) -> str:
 
 
 @mcp.tool
-def backtest(code: str, name: str = "", timeout_seconds: int = 600) -> dict:
+def backtest(
+    code: str, name: str = "", project: str = "", timeout_seconds: int = 600
+) -> dict:
     """Run a Lean backtest of a Python QCAlgorithm and return its statistics.
 
     ``code`` is a complete algorithm module defining exactly one
     ``class <Name>(QCAlgorithm)`` (start with ``from AlgorithmImports import *``;
-    set start/end dates, cash, and universe inside ``initialize``). Data available:
-    the Lean sample set (e.g. SPY equity minute/daily). Runs synchronously --
-    typically tens of seconds. On failure the engine log tail comes back so the
-    algorithm can be fixed and resubmitted.
+    set start/end dates, cash, and universe inside ``initialize``). ``project``
+    groups related runs (e.g. iterations of one strategy) into one folder, like
+    lean-cli's <project>/backtests/<timestamp> layout. Data available: the Lean
+    sample set (e.g. SPY equity minute/daily). Runs synchronously -- typically
+    tens of seconds. On failure the engine log tail comes back so the algorithm
+    can be fixed and resubmitted.
     """
     match = _CLASS_RE.search(code)
     if not match:
@@ -118,7 +122,10 @@ def backtest(code: str, name: str = "", timeout_seconds: int = 600) -> dict:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     slug = _SLUG_RE.sub("-", name or class_name).strip("-").lower() or "backtest"
     backtest_id = f"{stamp}-{slug}"
-    job = BACKTESTS / backtest_id
+    # The project is a shelving convention only (the engine never sees it); the id
+    # stays the single retrieval handle. Always two levels, so "" gets a bucket.
+    project_slug = _SLUG_RE.sub("-", project).strip("-").lower() or "default"
+    job = BACKTESTS / project_slug / backtest_id
     job.mkdir(parents=True)
 
     (job / "main.py").write_text(code)
@@ -166,15 +173,17 @@ def backtest(code: str, name: str = "", timeout_seconds: int = 600) -> dict:
 def backtest_result(backtest_id: str) -> dict:
     """Full results of a past backtest: statistics, trade/portfolio breakdowns,
     and order events. Run folders under the state volume persist across restarts."""
-    job = BACKTESTS / backtest_id
-    result_file = job / f"{backtest_id}.json"
-    if not result_file.exists():
+    # Ids embed a timestamp, so they're unique across projects: find the run
+    # whatever project it was shelved under.
+    job = next(BACKTESTS.glob(f"*/{backtest_id}"), None)
+    if job is None or not (job / f"{backtest_id}.json").exists():
         return {
             "status": "not_found",
             "id": backtest_id,
             "error": "No results for this id (unknown, failed, or timed out).",
-            "log_tail": _tail(job / "log.txt"),
+            "log_tail": _tail(job / "log.txt") if job else "",
         }
+    result_file = job / f"{backtest_id}.json"
 
     data = json.loads(result_file.read_text())
     total = data.get("totalPerformance") or {}

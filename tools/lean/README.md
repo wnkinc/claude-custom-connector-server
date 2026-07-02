@@ -21,9 +21,10 @@ agent has executed.
 
 ## Tools
 
-- `backtest(code, name?, timeout_seconds?)` — run a Python QCAlgorithm,
+- `backtest(code, name?, project?, timeout_seconds?)` — run a Python QCAlgorithm,
   synchronously; returns the statistics map (or the engine log tail on failure, so
-  the agent can iterate).
+  the agent can iterate). `project` shelves related runs into one folder
+  (lean-cli's `<project>/backtests/<timestamp>` idea); the id stays the one handle.
 - `backtest_result(id)` — full stats, trade/portfolio statistics, and orders of a
   past run (run folders persist on the state volume).
 
