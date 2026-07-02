@@ -22,9 +22,8 @@ services:
     networks:
       - internal   # forwards to the tools over the private network
       - edge       # dials out to the Cloudflare edge
-    depends_on:
-      xmcp:
-        condition: service_healthy
+    # No depends_on: which tools run is chosen per-deploy via COMPOSE_PROFILES, so the
+    # ingress can't require any one of them. Routes 502 until their tool is healthy.
 
   # The tools' secrets are already loaded by the base; this overlay flips posture on and
   # stamps each tool's public URL from MCP_DOMAIN (environment beats env_file).
@@ -58,6 +57,8 @@ configs:
       credentials-file: /etc/cloudflared/creds.json
 
       # Each MCP server does its OWN Google OAuth (no Cloudflare Access policy here).
+      # Routes for tools you haven't enabled in COMPOSE_PROFILES just answer 502 at the
+      # edge (harmless); delete a route if you'd rather the hostname 404.
       ingress:
         - hostname: xmcp.${MCP_DOMAIN:?set MCP_DOMAIN in the root .env (cp env.example .env)}
           service: http://xmcp:8061

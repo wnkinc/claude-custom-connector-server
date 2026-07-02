@@ -18,11 +18,16 @@ desktop, web, and mobile.
 ## Quick start
 
 ```
+cp env.example .env   # pick your tools: COMPOSE_PROFILES=xmcp,data,...
 docker compose up --build                                               # local (auth off)
 
-cp env.example .env   # public only: set MCP_DOMAIN + TUNNEL_ID (see docs/SETUP.md)
+# public: also set MCP_DOMAIN + TUNNEL_ID in .env (see docs/SETUP.md)
 docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d  # public (auth on)
 ```
+
+Each tool is opt-in via a compose profile named after it — only the tools in
+`COMPOSE_PROFILES` are built and started, so you never pull an image (lean's is
+13GB) for a tool you don't want.
 
 New tool: `scripts/new-tool.sh`. How it fits together:
 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.

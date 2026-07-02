@@ -38,6 +38,20 @@ The same image runs locally (`docker compose up`) and in the cloud — transport
   `internal` network, so each tool's credentials and egress stay isolated — a bug or bad
   dep in one stays contained to that tool.
 
+- **Tools are opt-in (compose profiles).** Every tool service carries a profile named
+  after itself; `COMPOSE_PROFILES` in the root `.env` picks which ones a deployment
+  builds and runs. The egress wall and guardrail carry no profile — they're the shared
+  substrate and always run. This is what keeps 3 tools or 100 tools the same repo: a
+  deployer never pulls the image of a tool they didn't ask for.
+
+- **Tools never call each other; cooperation is an artifact plane.** When two tools need
+  to cooperate (data produces the lake, lean backtests it), they share a named volume
+  carrying artifacts in a documented format — exactly one writer, and the format is the
+  contract (here Lean's own on-disk data format, not something we invented). The
+  dependency stays soft: lean without data simply reports no data, data without lean
+  just exports to a volume nobody reads. No tool ever holds another tool's credentials
+  or network access.
+
 - **All internet access flows through the egress allowlist (the strongest single
   control).** Each tool sits on an `internal` Docker network whose only route off-box is
   the squid sidecar; squid enforces a per-tool domain allowlist (default-deny) and is the
@@ -55,6 +69,7 @@ The same image runs locally (`docker compose up`) and in the cloud — transport
 `scripts/new-tool.sh <name> <port>` stamps `tools/<name>/` (server stub wired to
 `security/serve.py`, `env.example`) + its egress allowlist. Then add a `Dockerfile`
 (copy an existing tool's) + a hashed `requirements.lock`, a service in
-`docker-compose.yml`, a route in the cloudflared `configs:` block of
-`docker-compose.tunnel.yml`, one redirect
-URI on the shared Google OAuth client, and the custom connector in Claude.
+`docker-compose.yml` (with its opt-in `profiles:` entry), a route in the cloudflared
+`configs:` block of `docker-compose.tunnel.yml`, the tool's name in `COMPOSE_PROFILES`
+(root `.env` + `env.example`'s list), one redirect URI on the shared Google OAuth
+client, and the custom connector in Claude.

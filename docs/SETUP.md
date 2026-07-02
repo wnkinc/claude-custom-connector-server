@@ -34,9 +34,10 @@ In the [Google Cloud Console](https://console.cloud.google.com/):
 cp env.example .env                         # deployment identity (all .env are gitignored)
 cp tools/xmcp/env.example tools/xmcp/.env   # this tool's secrets
 ```
-Set in the root `.env`: `MCP_DOMAIN` (your domain) and `TUNNEL_ID` (the Cloudflare
-tunnel UUID). Compose interpolates these into the tunnel overlay — the ingress routes
-and each tool's `MCP_PUBLIC_URL`.
+Set in the root `.env`: `COMPOSE_PROFILES` (which tools to run — each tool is opt-in
+via a profile named after it), `MCP_DOMAIN` (your domain) and `TUNNEL_ID` (the
+Cloudflare tunnel UUID). Compose interpolates these into the tunnel overlay — the
+ingress routes and each tool's `MCP_PUBLIC_URL`.
 
 Set in `tools/xmcp/.env`: `X_BEARER_TOKEN`, `X_API_TOOL_ALLOWLIST` (e.g.
 `getUsersByUsername,searchPostsRecent`), `XAI_API_KEY` (only for `grok_x_search`),
