@@ -1,0 +1,175 @@
+"""Tests for serve()'s security composition.
+
+Posture flags, env overrides, middleware order, outputSchema stripping, and
+transport selection. ``mcp.run`` is replaced with a recorder -- no server, no
+network. Auth wiring is covered in test_auth.py; here only its fail-closed
+behavior through serve() is asserted.
+"""
+
+import pytest
+from fastmcp import FastMCP
+
+from security.approval.middleware import ApprovalMiddleware
+from security.guardrail.middleware import GuardrailMiddleware
+from security.serve import _env_override, _strip_local_output_schemas, serve
+
+POSTURE_ENV = [
+    "MCP_AUTH_ENABLED",
+    "MCP_REQUIRE_APPROVAL",
+    "MCP_UNTRUSTED_OUTPUT",
+    "MCP_KEEP_OUTPUT_SCHEMA",
+    "MCP_TRANSPORT",
+    "MCP_HOST",
+]
+
+
+@pytest.fixture(autouse=True)
+def clean_posture_env(monkeypatch):
+    """The dev shell may carry posture env; tests must start from the code's defaults."""
+    for name in POSTURE_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
+def _mcp() -> FastMCP:
+    mcp = FastMCP("t")
+
+    @mcp.tool
+    def add(a: int, b: int) -> dict:
+        return {"total": a + b}
+
+    return mcp
+
+
+def _serve_captured(mcp, **kwargs) -> dict:
+    """Run serve() with mcp.run recording its kwargs instead of serving."""
+    calls: list[dict] = []
+    mcp.run = lambda **kw: calls.append(kw)
+    serve(mcp, port=8000, **kwargs)
+    assert len(calls) == 1
+    return calls[0]
+
+
+def _middleware_types(mcp) -> list[type]:
+    return [type(m) for m in mcp.middleware]
+
+
+def _tool_schemas(mcp) -> dict[str, object]:
+    comps = mcp._local_provider._components
+    return {str(k): v.output_schema for k, v in comps.items() if str(k).startswith("tool:")}
+
+
+# --- posture composition ---------------------------------------------------------
+
+
+def test_default_posture_is_bare_http():
+    mcp = _mcp()
+    run_kwargs = _serve_captured(mcp)
+    types = _middleware_types(mcp)
+    assert ApprovalMiddleware not in types
+    assert GuardrailMiddleware not in types
+    assert mcp.auth is None  # MCP_AUTH_ENABLED unset -> loopback mode
+    assert all(schema is not None for schema in _tool_schemas(mcp).values())
+    assert run_kwargs == {"transport": "http", "host": "127.0.0.1", "port": 8000}
+
+
+def test_untrusted_output_adds_guardrail_and_strips_schemas():
+    mcp = _mcp()
+    assert all(schema is not None for schema in _tool_schemas(mcp).values())
+    _serve_captured(mcp, untrusted_output=True)
+    assert GuardrailMiddleware in _middleware_types(mcp)
+    assert all(schema is None for schema in _tool_schemas(mcp).values())
+
+
+def test_approval_is_outermost_of_the_two():
+    # FastMCP wraps reversed(middleware): first-added is outermost. Approval must
+    # short-circuit BEFORE the guardrail ever sees a result (see serve()'s docstring).
+    mcp = _mcp()
+    _serve_captured(mcp, untrusted_output=True, require_approval=True)
+    types = _middleware_types(mcp)
+    assert types.index(ApprovalMiddleware) < types.index(GuardrailMiddleware)
+
+
+def test_keep_output_schema_escape_hatch(monkeypatch):
+    monkeypatch.setenv("MCP_KEEP_OUTPUT_SCHEMA", "1")
+    mcp = _mcp()
+    _serve_captured(mcp, untrusted_output=True)
+    assert GuardrailMiddleware in _middleware_types(mcp)
+    assert all(schema is not None for schema in _tool_schemas(mcp).values())
+
+
+def test_auth_on_but_unconfigured_refuses_to_start(monkeypatch):
+    monkeypatch.setenv("MCP_AUTH_ENABLED", "1")
+    with pytest.raises(RuntimeError, match="Refusing"):
+        _serve_captured(_mcp())
+
+
+# --- env overrides of the tool's declared posture --------------------------------
+
+
+def test_env_flips_posture_on(monkeypatch):
+    monkeypatch.setenv("MCP_UNTRUSTED_OUTPUT", "1")
+    mcp = _mcp()
+    _serve_captured(mcp)  # tool default: trusted
+    assert GuardrailMiddleware in _middleware_types(mcp)
+
+
+def test_env_flips_posture_off(monkeypatch):
+    monkeypatch.setenv("MCP_REQUIRE_APPROVAL", "0")
+    mcp = _mcp()
+    _serve_captured(mcp, require_approval=True)
+    assert ApprovalMiddleware not in _middleware_types(mcp)
+
+
+def test_blank_env_keeps_tool_default(monkeypatch):
+    # Silence never silently weakens a tool: blank != off.
+    monkeypatch.setenv("MCP_REQUIRE_APPROVAL", "")
+    mcp = _mcp()
+    _serve_captured(mcp, require_approval=True)
+    assert ApprovalMiddleware in _middleware_types(mcp)
+
+
+@pytest.mark.parametrize(
+    ("raw", "default", "expected"),
+    [
+        (None, True, True),
+        (None, False, False),
+        ("  ", True, True),
+        ("1", False, True),
+        ("true", False, True),
+        ("0", True, False),
+        ("off", True, False),
+    ],
+)
+def test_env_override_table(monkeypatch, raw, default, expected):
+    if raw is None:
+        monkeypatch.delenv("X_FLAG", raising=False)
+    else:
+        monkeypatch.setenv("X_FLAG", raw)
+    assert _env_override("X_FLAG", default) is expected
+
+
+# --- transport selection ----------------------------------------------------------
+
+
+def test_transport_stdio(monkeypatch):
+    monkeypatch.setenv("MCP_TRANSPORT", "stdio")
+    assert _serve_captured(_mcp()) == {"transport": "stdio"}
+
+
+def test_transport_typo_fails_closed(monkeypatch):
+    monkeypatch.setenv("MCP_TRANSPORT", "sse")
+    with pytest.raises(ValueError, match="MCP_TRANSPORT"):
+        _serve_captured(_mcp())
+
+
+def test_host_comes_from_env(monkeypatch):
+    monkeypatch.setenv("MCP_HOST", "0.0.0.0")
+    assert _serve_captured(_mcp())["host"] == "0.0.0.0"
+
+
+# --- schema strip robustness ------------------------------------------------------
+
+
+def test_strip_noops_when_fastmcp_internals_change():
+    # Reaches a FastMCP internal; must degrade to a no-op, never crash the server.
+    _strip_local_output_schemas(object())
