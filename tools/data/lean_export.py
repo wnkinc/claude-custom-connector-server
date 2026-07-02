@@ -14,6 +14,7 @@ Zips are written atomically (tmp + rename) so the lean engine never reads a
 half-written file mid-backtest. Equities are deliberately NOT exported: correct
 equity data needs factor/map files (splits/dividends); revisit when needed.
 """
+
 from __future__ import annotations
 
 import os
@@ -72,9 +73,7 @@ def _write_zip(dest: Path, entry_name: str, lines: list[str]) -> None:
         raise
 
 
-def export_crypto(
-    df: pd.DataFrame, symbol: str, interval: str, market: str = "coinbase"
-) -> dict:
+def export_crypto(df: pd.DataFrame, symbol: str, interval: str, market: str = "coinbase") -> dict:
     """Write a lake crypto frame into the Lean data folder; return a summary.
 
     ``symbol`` is the lake's hyphen-less pair (e.g. BTCUSD); Lean's file naming is
@@ -95,10 +94,12 @@ def export_crypto(
         for day, chunk in bars.groupby(bars.index.date):
             stamp = day.strftime("%Y%m%d")
             lines = [
-                ",".join([
-                    str(int((t - t.normalize()).total_seconds() * 1000)),
-                    *(_num(r[c]) for c in _OHLCV),
-                ])
+                ",".join(
+                    [
+                        str(int((t - t.normalize()).total_seconds() * 1000)),
+                        *(_num(r[c]) for c in _OHLCV),
+                    ]
+                )
                 for t, r in chunk.iterrows()
             ]
             _write_zip(

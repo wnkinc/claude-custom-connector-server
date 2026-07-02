@@ -50,7 +50,9 @@ def test_path_for_safe_symbol(tmp_path, monkeypatch):
 
 def test_ingest_persists_and_read_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    s = lake.ingest(("crypto", "tiingo", "BTCUSD", "1d"), _frame(["2024-01-02", "2024-01-03"], [1.5, 2.0]))
+    s = lake.ingest(
+        ("crypto", "tiingo", "BTCUSD", "1d"), _frame(["2024-01-02", "2024-01-03"], [1.5, 2.0])
+    )
     assert s["key"] == "crypto/tiingo/BTCUSD/1d"
     assert s["rows"] == 2 and s["fetched"] == 2 and s["added"] == 2
 
@@ -97,7 +99,9 @@ def test_read_missing_returns_none(tmp_path, monkeypatch):
 
 def test_catalog_lists_keys_with_rows_and_span(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    lake.ingest(("crypto", "tiingo", "ETHUSD", "1m"), _frame(["2024-01-02", "2024-01-03"], [1.0, 2.0]))
+    lake.ingest(
+        ("crypto", "tiingo", "ETHUSD", "1m"), _frame(["2024-01-02", "2024-01-03"], [1.0, 2.0])
+    )
     lake.ingest(("crypto", "tiingo", "BTCUSD", "1d"), _frame(["2024-01-02"], [5.0]))
 
     cat = {e["key"]: e for e in lake.catalog()}
@@ -156,7 +160,9 @@ def test_data_read_hit_returns_rows(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     import server
 
-    lake.ingest(("crypto", "tiingo", "BTCUSD", "1m"), _frame(["2024-01-02", "2024-01-03"], [1.0, 2.0]))
+    lake.ingest(
+        ("crypto", "tiingo", "BTCUSD", "1m"), _frame(["2024-01-02", "2024-01-03"], [1.0, 2.0])
+    )
     out = server.data_read("crypto", "BTCUSD", "1m", "tiingo", tail=1)
     assert "1m crypto bars for BTCUSD (tiingo)" in out
 
@@ -166,11 +172,14 @@ def test_data_read_hit_returns_rows(tmp_path, monkeypatch):
 
 def _fake_obb(caps, df):
     """A stand-in ``obb`` whose <namespace>.price.historical records its kwargs into caps[ns]."""
+
     def endpoint(cap):
         def historical(**kwargs):
             cap.update(kwargs)
             return SimpleNamespace(to_df=lambda: df)
+
         return SimpleNamespace(price=SimpleNamespace(historical=historical))
+
     return SimpleNamespace(**{ns: endpoint(cap) for ns, cap in caps.items()})
 
 
@@ -182,8 +191,11 @@ def test_crypto_bars_calls_crypto_endpoint(monkeypatch):
     out = feeds.crypto_bars("BTCUSD", "1d", "2024-01-01", "2024-01-10")
     assert out is df
     assert caps["crypto"] == {
-        "symbol": "BTCUSD", "interval": "1d", "start_date": "2024-01-01",
-        "end_date": "2024-01-10", "provider": "tiingo",  # the fixed default provider
+        "symbol": "BTCUSD",
+        "interval": "1d",
+        "start_date": "2024-01-01",
+        "end_date": "2024-01-10",
+        "provider": "tiingo",  # the fixed default provider
     }
 
 
@@ -286,8 +298,13 @@ def _btc_golden_frame():
     # Matches the first/last rows of the engine image's bundled
     # crypto/coinbase/daily/btcusd_trade.zip exactly.
     return pd.DataFrame(
-        {"open": [300.0, 6316.0], "high": [370.0, 6544.99], "low": [300.0, 6139.57],
-         "close": [370.0, 6253.67], "volume": [0.05655554, 10178.43146644]},
+        {
+            "open": [300.0, 6316.0],
+            "high": [370.0, 6544.99],
+            "low": [300.0, 6139.57],
+            "close": [370.0, 6253.67],
+            "volume": [0.05655554, 10178.43146644],
+        },
         index=pd.to_datetime(["2014-12-01", "2018-08-13"]),
     )
 
@@ -310,6 +327,7 @@ def test_export_is_world_readable(tmp_path, monkeypatch):
     monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path))
     s = lean_export.export_crypto(_btc_golden_frame(), "BTCUSD", "1d")
     from pathlib import Path
+
     assert Path(s["dest"]).stat().st_mode & 0o044 == 0o044
 
 

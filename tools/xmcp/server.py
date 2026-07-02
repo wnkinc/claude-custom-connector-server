@@ -194,10 +194,7 @@ def filter_openapi_spec(spec: dict) -> dict:
 
     filtered["paths"] = new_paths
     n_tools = sum(
-        1
-        for item in new_paths.values()
-        for method in item
-        if method.lower() in HTTP_METHODS
+        1 for item in new_paths.values() for method in item if method.lower() in HTTP_METHODS
     )
     used_default = not parse_csv_env("X_API_TOOL_ALLOWLIST")
     LOGGER.warning(

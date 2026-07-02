@@ -137,6 +137,4 @@ def serve(
     elif transport == "http":
         mcp.run(transport="http", host=host, port=port)
     else:
-        raise ValueError(
-            f"Unsupported MCP_TRANSPORT={transport!r}; expected 'http' or 'stdio'."
-        )
+        raise ValueError(f"Unsupported MCP_TRANSPORT={transport!r}; expected 'http' or 'stdio'.")

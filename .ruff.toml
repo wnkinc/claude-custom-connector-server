@@ -1,0 +1,19 @@
+# Lint/format for all first-party Python. Tools run on py3.12 (amazonlinux) except
+# lean, which is pinned to the engine image's py3.11 — so 3.11 is the floor.
+target-version = "py311"
+line-length = 100
+
+# Each tool dir is its own import root inside its container (server.py imports
+# siblings like `lake`/`feeds` top-level); listing them keeps isort classifying
+# those as first-party.
+src = [".", "tools/data", "tools/lean", "tools/xmcp"]
+
+extend-exclude = ["vendor"]
+
+[lint]
+select = [
+    "E4", "E7", "E9", "F",  # pycodestyle/pyflakes defaults
+    "I",                    # isort
+    "UP",                   # pyupgrade
+    "B",                    # bugbear
+]

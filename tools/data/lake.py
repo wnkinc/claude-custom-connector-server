@@ -13,6 +13,7 @@ so a file accumulates history across calls. ``read`` reads it back.
 Adding an OpenBB capability does NOT touch this file — only ``feeds.py`` (the fetch) and
 ``server.py`` (the tool) grow. This is the surface you maintain; it stays constant.
 """
+
 from __future__ import annotations
 
 import os
@@ -63,10 +64,16 @@ def catalog(*prefix: str) -> list[dict]:
         return []
     out: list[dict] = []
     for path in sorted(base.rglob("*.parquet")):
-        entry = {"key": "/".join(path.relative_to(root).with_suffix("").parts),
-                 "rows": None, "start": None, "end": None, "path": str(path)}
+        entry = {
+            "key": "/".join(path.relative_to(root).with_suffix("").parts),
+            "rows": None,
+            "start": None,
+            "end": None,
+            "path": str(path),
+        }
         try:
             import pyarrow.parquet as pq
+
             entry["rows"] = pq.ParquetFile(path).metadata.num_rows
             idx = pd.read_parquet(path, columns=[]).index  # index only, no data columns
             if len(idx):
@@ -88,13 +95,15 @@ def _merge(existing: pd.DataFrame, fetched: pd.DataFrame) -> pd.DataFrame:
     return combined.sort_index()
 
 
-def _summary(key: tuple[str, ...], df: pd.DataFrame, path: Path, *, fetched: int, added: int) -> dict:
+def _summary(
+    key: tuple[str, ...], df: pd.DataFrame, path: Path, *, fetched: int, added: int
+) -> dict:
     idx = df.index
     return {
         "key": "/".join(key),
-        "rows": int(len(df)),       # total rows now stored
-        "fetched": int(fetched),    # rows the feed returned this call
-        "added": int(added),        # net-new rows after dedupe/merge
+        "rows": int(len(df)),  # total rows now stored
+        "fetched": int(fetched),  # rows the feed returned this call
+        "added": int(added),  # net-new rows after dedupe/merge
         "start": idx.min().isoformat() if len(df) else None,
         "end": idx.max().isoformat() if len(df) else None,
         "path": str(path),

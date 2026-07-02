@@ -22,14 +22,13 @@ from contextlib import asynccontextmanager
 
 import anyio
 from fastapi import FastAPI
-from pydantic import BaseModel
-
 from llamafirewall import (
     LlamaFirewall,
     Role,
     ScannerType,
     UserMessage,
 )
+from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("guardrail")
@@ -53,14 +52,18 @@ def _build_firewall() -> None:
     try:
         STATE.update(
             lf=_build_warm([ScannerType.PROMPT_GUARD, ScannerType.HIDDEN_ASCII]),
-            scanners=["prompt_guard", "hidden_ascii"], prompt_guard_loaded=True, degraded=False,
+            scanners=["prompt_guard", "hidden_ascii"],
+            prompt_guard_loaded=True,
+            degraded=False,
         )
         log.info("guardrail ready: PromptGuard + HiddenASCII")
     except Exception as exc:  # gated model missing / not logged in / dep mismatch
         log.warning("PromptGuard unavailable (%s) — DEGRADED to HiddenASCII-only", exc)
         STATE.update(
             lf=_build_warm([ScannerType.HIDDEN_ASCII]),
-            scanners=["hidden_ascii"], prompt_guard_loaded=False, degraded=True,
+            scanners=["hidden_ascii"],
+            prompt_guard_loaded=False,
+            degraded=True,
         )
 
 

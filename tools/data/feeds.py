@@ -21,6 +21,7 @@ ending just before the earliest bar already held, until it reaches ``start``. Da
 bars never hit the cap, so they pass straight through. This is the only reason
 ``feeds`` does more than one fetch.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -117,8 +118,11 @@ def _bars(namespace, symbol, interval, start, end, provider) -> pd.DataFrame:
 
 
 def crypto_bars(
-    symbol: str, interval: str = "1d", start: str | None = None,
-    end: str | None = None, provider: str = DEFAULT_PROVIDER,
+    symbol: str,
+    interval: str = "1d",
+    start: str | None = None,
+    end: str | None = None,
+    provider: str = DEFAULT_PROVIDER,
 ) -> pd.DataFrame:
     """Historical OHLCV bars for a crypto pair (e.g. BTCUSD)."""
     return _bars("crypto", symbol, interval, start, end, provider)

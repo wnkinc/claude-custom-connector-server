@@ -21,7 +21,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastmcp import FastMCP
@@ -110,9 +110,7 @@ def _tail(path: Path, lines: int = LOG_TAIL_LINES) -> str:
 
 
 @mcp.tool
-def backtest(
-    code: str, name: str = "", project: str = "", timeout_seconds: int = 600
-) -> dict:
+def backtest(code: str, name: str = "", project: str = "", timeout_seconds: int = 600) -> dict:
     """Run a Lean backtest of a Python QCAlgorithm and return its statistics.
 
     ``code`` is a complete algorithm module defining exactly one
@@ -139,7 +137,7 @@ def backtest(
         }
     class_name = match.group(1)
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     slug = _SLUG_RE.sub("-", name or class_name).strip("-").lower() or "backtest"
     backtest_id = f"{stamp}-{slug}"
     # The project is a shelving convention only (the engine never sees it); the id
@@ -156,17 +154,27 @@ def backtest(
     # The engine must NOT see this wrapper's venv on PATH: pythonnet resolves the
     # embedded interpreter's prefix from the first `python` found there, and the
     # venv's empty site-packages then shadows the engine's miniconda (pandas etc.).
-    env = {**os.environ, "PATH": os.pathsep.join(
-        p for p in os.environ["PATH"].split(os.pathsep)
-        if p != str(Path(sys.prefix) / "bin")
-    )}
+    env = {
+        **os.environ,
+        "PATH": os.pathsep.join(
+            p for p in os.environ["PATH"].split(os.pathsep) if p != str(Path(sys.prefix) / "bin")
+        ),
+    }
     console = job / "console.log"
     try:
         with console.open("w") as out:
             proc = subprocess.run(
-                ["dotnet", str(LAUNCHER_DIR / "QuantConnect.Lean.Launcher.dll"),
-                 "--config", str(job / "config.json")],
-                cwd=job, env=env, stdout=out, stderr=subprocess.STDOUT, timeout=timeout,
+                [
+                    "dotnet",
+                    str(LAUNCHER_DIR / "QuantConnect.Lean.Launcher.dll"),
+                    "--config",
+                    str(job / "config.json"),
+                ],
+                cwd=job,
+                env=env,
+                stdout=out,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
             )
     except subprocess.TimeoutExpired:
         return {
@@ -277,7 +285,8 @@ def available_data() -> list[dict]:
     root = Path(DATA_FOLDER)
     out: list[dict] = []
     asset_dirs = [
-        p for p in (sorted(root.iterdir()) if root.exists() else [])
+        p
+        for p in (sorted(root.iterdir()) if root.exists() else [])
         if p.is_dir() and p.name not in ("market-hours", "symbol-properties")
     ]
     for asset in asset_dirs:
@@ -288,15 +297,28 @@ def available_data() -> list[dict]:
                     for sym in sorted(p for p in res.iterdir() if p.is_dir()):
                         days = sorted(f.name[:8] for f in sym.glob("*_trade.zip"))
                         if days:
-                            out.append({**base, "symbol": sym.name.upper(),
-                                        "start": days[0], "end": days[-1]})
+                            out.append(
+                                {
+                                    **base,
+                                    "symbol": sym.name.upper(),
+                                    "start": days[0],
+                                    "end": days[-1],
+                                }
+                            )
                 else:
                     for zp in sorted(res.glob("*.zip")):
                         if zp.stem.endswith("_quote"):
                             continue
                         start, end, bars = _zip_coverage(zp)
-                        out.append({**base, "symbol": zp.stem.removesuffix("_trade").upper(),
-                                    "start": start, "end": end, "bars": bars})
+                        out.append(
+                            {
+                                **base,
+                                "symbol": zp.stem.removesuffix("_trade").upper(),
+                                "start": start,
+                                "end": end,
+                                "bars": bars,
+                            }
+                        )
     return out
 
 

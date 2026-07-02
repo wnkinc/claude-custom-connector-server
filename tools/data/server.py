@@ -17,6 +17,7 @@ Tools exposed:
   data-read     — read stored bars for one symbol/interval back out of the lake
   lean-export   — write stored crypto bars into the Lean engine's data folder
 """
+
 import os
 import sys
 from pathlib import Path
@@ -26,11 +27,10 @@ from fastmcp import FastMCP
 # Make the repo root importable regardless of CWD (we run from the tool dir), then
 # load the shared Google-OAuth provider used by every public server.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from security.serve import serve  # noqa: E402
-
 import feeds  # noqa: E402
 import lake  # noqa: E402
 import lean_export  # noqa: E402
+from security.serve import serve  # noqa: E402
 
 mcp = FastMCP(name="data")
 
@@ -112,7 +112,9 @@ def crypto_ingest(
     extend coverage). Pass ``refresh=true`` to replace instead of merge. After ingesting,
     make the series backtestable with lean-export.
     """
-    return _ingest("crypto", feeds.DEFAULT_PROVIDER, feeds.crypto_bars, symbol, interval, start, end, refresh)
+    return _ingest(
+        "crypto", feeds.DEFAULT_PROVIDER, feeds.crypto_bars, symbol, interval, start, end, refresh
+    )
 
 
 def _fmt_catalog(entries: list[dict], header: str) -> str:
@@ -141,7 +143,9 @@ def data_catalog(asset: str = "") -> str:
     entries = lake.catalog(asset) if asset else lake.catalog()
     if not entries:
         where = f" under {asset!r}" if asset else ""
-        return f"The lake is empty{where} — nothing ingested yet. Ingest with equity/crypto/fx-ingest."
+        return (
+            f"The lake is empty{where} — nothing ingested yet. Ingest with equity/crypto/fx-ingest."
+        )
     scope = f"{asset!r} datasets" if asset else "all stored datasets"
     return _fmt_catalog(entries, f"Lake — {scope} ({len(entries)}):")
 
@@ -173,8 +177,10 @@ def data_read(
         have = [e for e in lake.catalog() if symbol in e["key"].split("/")]
         if have:
             return _fmt_catalog(
-                have, f"No {asset or '?'}/{source}/{symbol}/{interval} stored. "
-                f"Stored for {symbol} — re-read with a matching source+interval:")
+                have,
+                f"No {asset or '?'}/{source}/{symbol}/{interval} stored. "
+                f"Stored for {symbol} — re-read with a matching source+interval:",
+            )
         return (
             f"Nothing stored for {symbol}. Ingest it first, or call data-catalog to see "
             f"what's available."
@@ -223,7 +229,7 @@ def lean_export_tool(
         f"Exported crypto/{source}/{symbol}/{interval} -> Lean {s['market']}/{s['resolution']}: "
         f"{s['rows']} bars ({s['start']} → {s['end']}) in {s['zips']} zip(s).\n"
         f"Written to {s['dest']}\n"
-        f"Backtest with: self.add_crypto(\"{symbol}\", Resolution.{s['resolution'].upper()}, "
+        f'Backtest with: self.add_crypto("{symbol}", Resolution.{s["resolution"].upper()}, '
         f"Market.{s['market'].upper()})"
     )
 

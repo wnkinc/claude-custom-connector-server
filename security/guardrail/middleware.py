@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
 
 import httpx
 from fastmcp.server.middleware import Middleware
@@ -107,7 +106,9 @@ class GuardrailMiddleware(Middleware):
         tool_name = getattr(getattr(context, "message", None), "name", "?")
         if decision == "allow":
             return ToolResult(
-                content=[TextContent(type="text", text=_WRAP.format(source=self.source, body=text))],
+                content=[
+                    TextContent(type="text", text=_WRAP.format(source=self.source, body=text))
+                ],
                 structured_content=None,
             )
         if decision == "block":

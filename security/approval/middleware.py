@@ -130,7 +130,7 @@ def _approval_shell(title: str, body_html: str) -> str:
         "margin:1rem 0;font-family:ui-monospace,monospace;word-break:break-word}"
         "button{font-size:1rem;padding:.7rem 1.4rem;border:0;border-radius:10px;cursor:pointer;margin:.25rem .5rem .25rem 0}"
         ".ok{background:#2563eb;color:#fff}.no{background:#3a1d1d;color:#f3b4b4}"
-        "</style></head><body><div class=\"card\">"
+        '</style></head><body><div class="card">'
         f"{body_html}</div></body></html>"
     )
 
@@ -164,15 +164,28 @@ async def _slack_post_approval(token: str, action: str) -> None:
     if not _slack_enabled():
         return
     blocks = [
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"⏸ *Approval requested*\n>{action}"}},
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"⏸ *Approval requested*\n>{action}"},
+        },
         {
             "type": "actions",
             "block_id": f"approval:{token}",
             "elements": [
-                {"type": "button", "style": "primary", "action_id": "approve",
-                 "text": {"type": "plain_text", "text": "✅ Approve"}, "value": token},
-                {"type": "button", "style": "danger", "action_id": "deny",
-                 "text": {"type": "plain_text", "text": "❌ Deny"}, "value": token},
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "action_id": "approve",
+                    "text": {"type": "plain_text", "text": "✅ Approve"},
+                    "value": token,
+                },
+                {
+                    "type": "button",
+                    "style": "danger",
+                    "action_id": "deny",
+                    "text": {"type": "plain_text", "text": "❌ Deny"},
+                    "value": token,
+                },
             ],
         },
     ]
@@ -246,8 +259,10 @@ def register_approval_routes(mcp) -> None:  # type: ignore[no-untyped-def]
         rec = _PENDING_APPROVALS.get(token)
         if rec is None:
             return HTMLResponse(
-                _approval_shell("Not found", "<h2>Link invalid or expired</h2>"
-                                "<p>This approval link is no longer valid.</p>"),
+                _approval_shell(
+                    "Not found",
+                    "<h2>Link invalid or expired</h2><p>This approval link is no longer valid.</p>",
+                ),
                 status_code=404,
             )
         if request.method == "POST":
@@ -255,20 +270,30 @@ def register_approval_routes(mcp) -> None:  # type: ignore[no-untyped-def]
             decision = form.get("decision")
             if decision == "approve":
                 rec["status"] = "approved"
-                return HTMLResponse(_approval_shell(
-                    "Approved", "<h2>✅ Approved</h2>"
-                    f'<div class="act">{html.escape(rec["action"])}</div>'
-                    "<p>Head back to Claude and tell it to continue.</p>"))
+                return HTMLResponse(
+                    _approval_shell(
+                        "Approved",
+                        "<h2>✅ Approved</h2>"
+                        f'<div class="act">{html.escape(rec["action"])}</div>'
+                        "<p>Head back to Claude and tell it to continue.</p>",
+                    )
+                )
             if decision == "deny":
                 rec["status"] = "denied"
-                return HTMLResponse(_approval_shell(
-                    "Denied", "<h2>❌ Denied</h2>"
-                    f'<div class="act">{html.escape(rec["action"])}</div>'))
-            return HTMLResponse(_approval_shell("Error", "<p>Unknown decision.</p>"), status_code=400)
+                return HTMLResponse(
+                    _approval_shell(
+                        "Denied",
+                        f'<h2>❌ Denied</h2><div class="act">{html.escape(rec["action"])}</div>',
+                    )
+                )
+            return HTMLResponse(
+                _approval_shell("Error", "<p>Unknown decision.</p>"), status_code=400
+            )
         # GET: show buttons only (no side effect) so a link prefetch can't auto-approve.
         if rec["status"] != "pending":
-            return HTMLResponse(_approval_shell(
-                "Already decided", f"<h2>Already {html.escape(rec['status'])}</h2>"))
+            return HTMLResponse(
+                _approval_shell("Already decided", f"<h2>Already {html.escape(rec['status'])}</h2>")
+            )
         return HTMLResponse(_approval_buttons_page(rec["action"]))
 
     @mcp.custom_route("/slack/interact", methods=["POST"], include_in_schema=False)

@@ -1,0 +1,16 @@
+# Run locally: `pre-commit install` once, then it runs on every commit.
+# CI runs the same config (single source of truth for enforcement).
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # Secret scanning: this repo's whole job is security posture; a leaked .env
+  # or tunnel cred in git history is the one unrecoverable mistake.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks
