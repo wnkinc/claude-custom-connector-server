@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Enforces exactly what the local git hook runs (ruff lint+format, gitleaks) --
+  # .pre-commit-config.yaml is the single source of truth for both.
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Hook envs (incl. the gitleaks Go build) are a one-time cost with this cache.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+      - run: pip install pre-commit
+      - run: pre-commit run --all-files --show-diff-on-failure
+
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tool: [data]  # xmcp/lean join the matrix when they grow tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"  # matches the tool containers
+          cache: pip
+          cache-dependency-path: tools/${{ matrix.tool }}/requirements.lock
+      # Full lockfile, not a test subset: doubles as "the lock still installs cleanly".
+      # pytest itself is dev-only and deliberately not in the runtime lock.
+      - run: pip install -r tools/${{ matrix.tool }}/requirements.lock pytest
+      - run: pytest -q
+        working-directory: tools/${{ matrix.tool }}
+
+  compose-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The real .env files are gitignored secrets, but compose hard-fails on a
+      # missing env_file -- empty stubs are enough for config validation.
+      - run: for t in xmcp data lean; do touch tools/$t/.env; done
+      - name: validate local posture
+        run: docker compose config -q
+      - name: validate public (tunnel) posture
+        run: docker compose -f docker-compose.yml -f docker-compose.tunnel.yml config -q
