@@ -198,6 +198,23 @@ def backtest_result(backtest_id: str) -> dict:
     }
 
 
+@mcp.tool
+def list_backtests(project: str = "") -> list[dict]:
+    """Past backtests (newest first), optionally one project's only. Everything is
+    derived from the run folders; the id embeds the run's timestamp and name."""
+    pattern = _SLUG_RE.sub("-", project).strip("-").lower() or "*"
+    runs = [
+        {
+            "id": job.name,
+            "project": job.parent.name,
+            "completed": (job / f"{job.name}.json").exists(),
+        }
+        for job in BACKTESTS.glob(f"{pattern}/*")
+        if job.is_dir()
+    ]
+    return sorted(runs, key=lambda run: run["id"], reverse=True)
+
+
 def main() -> None:
     BACKTESTS.mkdir(parents=True, exist_ok=True)
     port = int(os.getenv("MCP_PORT", "8064"))

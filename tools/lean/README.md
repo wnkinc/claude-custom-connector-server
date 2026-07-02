@@ -27,6 +27,8 @@ agent has executed.
   (lean-cli's `<project>/backtests/<timestamp>` idea); the id stays the one handle.
 - `backtest_result(id)` — full stats, trade/portfolio statistics, and orders of a
   past run (run folders persist on the state volume).
+- `list_backtests(project?)` — past runs newest-first (id / project / completed),
+  derived purely from the run folders.
 
 ## Scope
 
