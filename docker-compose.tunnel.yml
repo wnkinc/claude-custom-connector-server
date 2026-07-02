@@ -1,5 +1,6 @@
 # Public overlay: adds the Cloudflare tunnel ingress and flips each tool to its public
-# posture. Layer it on top of the base compose:
+# posture. Deployment identity (your domain, tunnel id) comes from the root .env
+# (`cp env.example .env` and fill it in). Layer it on top of the base compose:
 #
 #   docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d
 #
@@ -13,8 +14,10 @@ services:
     # Run as the credentials file's owner so it can read the mounted secret (the image's
     # default user can't). Override if your staged credentials are owned by another uid.
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    configs:
+      - source: cloudflared-config
+        target: /etc/cloudflared/config.yml
     volumes:
-      - ./security/ingress/cloudflared.config.yml:/etc/cloudflared/config.yml:ro
       - ./security/ingress/secrets/creds.json:/etc/cloudflared/creds.json:ro
     networks:
       - internal   # forwards to the tools over the private network
@@ -23,17 +26,45 @@ services:
       xmcp:
         condition: service_healthy
 
-  # The tools' secrets are already loaded by the base; this overlay only flips posture on.
+  # The tools' secrets are already loaded by the base; this overlay flips posture on and
+  # stamps each tool's public URL from MCP_DOMAIN (environment beats env_file).
   xmcp:
     environment:
       MCP_AUTH_ENABLED: "1"
       MCP_REQUIRE_APPROVAL: "1"
       MCP_UNTRUSTED_OUTPUT: "1"
+      MCP_PUBLIC_URL: https://xmcp.${MCP_DOMAIN}
 
   data:
     environment:
       MCP_AUTH_ENABLED: "1"
+      MCP_PUBLIC_URL: https://data.${MCP_DOMAIN}
 
   lean:
     environment:
       MCP_AUTH_ENABLED: "1"
+      MCP_PUBLIC_URL: https://lean.${MCP_DOMAIN}
+
+# INGRESS routing, committed here so nothing public runs that isn't in the repo. Compose
+# interpolates ${MCP_DOMAIN}/${TUNNEL_ID} from the root .env and mounts the rendered
+# file into the sidecar -- the committed routing stays generic. cloudflared dials OUT to
+# Cloudflare's edge (no inbound ports) and forwards to each tool over the compose
+# `internal` network by service name, so tools publish no host ports. The credentials
+# JSON is the secret half, staged at security/ingress/secrets/creds.json (gitignored).
+configs:
+  cloudflared-config:
+    content: |
+      tunnel: ${TUNNEL_ID:?set TUNNEL_ID in the root .env (cp env.example .env)}
+      credentials-file: /etc/cloudflared/creds.json
+
+      # Each MCP server does its OWN Google OAuth (no Cloudflare Access policy here).
+      ingress:
+        - hostname: xmcp.${MCP_DOMAIN:?set MCP_DOMAIN in the root .env (cp env.example .env)}
+          service: http://xmcp:8061
+        - hostname: data.${MCP_DOMAIN}
+          service: http://data:8062
+        - hostname: lean.${MCP_DOMAIN}
+          service: http://lean:8064
+
+        # Everything else is refused.
+        - service: http_status:404

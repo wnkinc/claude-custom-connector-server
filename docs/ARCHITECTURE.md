@@ -6,7 +6,7 @@
 Claude desktop / claude.ai web / mobile     (custom connector, private to your account)
         │  HTTPS
         ▼
-xmcp.secure-agentic-engineering.com          Cloudflare edge — TLS, hides home IP, WAF
+xmcp.example.com (your MCP_DOMAIN)           Cloudflare edge — TLS, hides home IP, WAF
         │  Cloudflare Tunnel (cloudflared sidecar, outbound-only transport)
         ▼
 xmcp container :8061                          FastMCP server on an internal Docker network
@@ -55,5 +55,6 @@ The same image runs locally (`docker compose up`) and in the cloud — transport
 `scripts/new-tool.sh <name> <port>` stamps `tools/<name>/` (server stub wired to
 `security/serve.py`, `env.example`) + its egress allowlist. Then add a `Dockerfile`
 (copy an existing tool's) + a hashed `requirements.lock`, a service in
-`docker-compose.yml`, a route in `security/ingress/cloudflared.config.yml`, one redirect
+`docker-compose.yml`, a route in the cloudflared `configs:` block of
+`docker-compose.tunnel.yml`, one redirect
 URI on the shared Google OAuth client, and the custom connector in Claude.

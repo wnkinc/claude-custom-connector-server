@@ -19,6 +19,8 @@ desktop, web, and mobile.
 
 ```
 docker compose up --build                                               # local (auth off)
+
+cp env.example .env   # public only: set MCP_DOMAIN + TUNNEL_ID (see docs/SETUP.md)
 docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d  # public (auth on)
 ```
 

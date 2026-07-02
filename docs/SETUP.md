@@ -1,10 +1,16 @@
 # Setup runbook — x-mcp as the first Claude-connected tool
 
-Goal: `https://xmcp.secure-agentic-engineering.com/mcp` reachable from Claude desktop,
+Goal: `https://xmcp.example.com/mcp` reachable from Claude desktop,
 web, and mobile, gated by "Sign in with Google" locked to your account.
 
+Throughout, `example.com` stands for your own domain — you set it once, as `MCP_DOMAIN`
+in the root `.env` (step 2), and compose stamps it into the ingress routes and each
+tool's public URL.
+
 Prereqs on this box: Docker + compose, a Cloudflare Tunnel (id + `credentials-file` in
-`~/.cloudflared/`), domain on Cloudflare, an X app bearer token.
+`~/.cloudflared/`), domain on Cloudflare with a DNS record per tool subdomain routed to
+the tunnel (`cloudflared tunnel route dns <TUNNEL_ID> xmcp.example.com`), an X app
+bearer token.
 
 ---
 
@@ -17,7 +23,7 @@ In the [Google Cloud Console](https://console.cloud.google.com/):
    `openid` + `.../auth/userinfo.email` (default scopes; Google verification review is
    skipped). Add every allowed email as a **Test user**; leave status **Testing**.
 3. **Credentials → Create OAuth client ID:** type **Web application**; redirect URI
-   `https://xmcp.secure-agentic-engineering.com/auth/callback`. Copy the **Client ID**
+   `https://xmcp.example.com/auth/callback`. Copy the **Client ID**
    and **Client secret**.
 
 (One OAuth client covers all tools; each new subdomain just adds another redirect URI.)
@@ -25,8 +31,13 @@ In the [Google Cloud Console](https://console.cloud.google.com/):
 ## 2. Fill secrets  (you)
 
 ```bash
-cp tools/xmcp/env.example tools/xmcp/.env   # .env is gitignored
+cp env.example .env                         # deployment identity (all .env are gitignored)
+cp tools/xmcp/env.example tools/xmcp/.env   # this tool's secrets
 ```
+Set in the root `.env`: `MCP_DOMAIN` (your domain) and `TUNNEL_ID` (the Cloudflare
+tunnel UUID). Compose interpolates these into the tunnel overlay — the ingress routes
+and each tool's `MCP_PUBLIC_URL`.
+
 Set in `tools/xmcp/.env`: `X_BEARER_TOKEN`, `X_API_TOOL_ALLOWLIST` (e.g.
 `getUsersByUsername,searchPostsRecent`), `XAI_API_KEY` (only for `grok_x_search`),
 `MCP_AUTH_ENABLED=1`, `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (step 1), and
@@ -37,8 +48,8 @@ Stage the tunnel credentials for the ingress sidecar (gitignored):
 mkdir -p security/ingress/secrets
 cp ~/.cloudflared/<TUNNEL_ID>.json security/ingress/secrets/creds.json
 ```
-Confirm the route for this host in `security/ingress/cloudflared.config.yml`
-(`xmcp.secure-agentic-engineering.com → http://xmcp:8061`).
+The route for this host (`xmcp.<MCP_DOMAIN> → http://xmcp:8061`) is stamped from the
+`configs:` block in `docker-compose.tunnel.yml`.
 
 ## 3. Bring up the public stack
 
@@ -58,17 +69,17 @@ docker compose logs -f xmcp        # expect: "OAuth enabled (Google) at https://
 ## 4. Verify the public endpoint
 
 ```bash
-curl -s https://xmcp.secure-agentic-engineering.com/.well-known/oauth-authorization-server | head -c 300; echo
-curl -s https://xmcp.secure-agentic-engineering.com/.well-known/oauth-protected-resource/mcp; echo
+curl -s https://xmcp.example.com/.well-known/oauth-authorization-server | head -c 300; echo
+curl -s https://xmcp.example.com/.well-known/oauth-protected-resource/mcp; echo
 # 401 MUST carry WWW-Authenticate with resource_metadata=... :
-curl -sD - -o /dev/null https://xmcp.secure-agentic-engineering.com/mcp | grep -i www-authenticate
+curl -sD - -o /dev/null https://xmcp.example.com/mcp | grep -i www-authenticate
 ```
 The last line must print `WWW-Authenticate: Bearer ... resource_metadata=...`.
 
 ## 5. Add the custom connector in Claude
 
 Settings → Connectors → Add custom connector →
-`https://xmcp.secure-agentic-engineering.com/mcp` → Connect → Google login. Works on
+`https://xmcp.example.com/mcp` → Connect → Google login. Works on
 **desktop** and **claude.ai web**; **mobile** inherits it. Then ask Claude to run
 `searchPostsRecent` or `grok_x_search`.
 
