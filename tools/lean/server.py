@@ -108,10 +108,16 @@ def backtest(
     ``class <Name>(QCAlgorithm)`` (start with ``from AlgorithmImports import *``;
     set start/end dates, cash, and universe inside ``initialize``). ``project``
     groups related runs (e.g. iterations of one strategy) into one folder, like
-    lean-cli's <project>/backtests/<timestamp> layout. Data available: the Lean
-    sample set (e.g. SPY equity minute/daily). Runs synchronously -- typically
-    tens of seconds. On failure the engine log tail comes back so the algorithm
-    can be fixed and resubmitted.
+    lean-cli's <project>/backtests/<timestamp> layout.
+
+    DATA AVAILABLE (the engine's bundled sample set -- backtests outside it find
+    no bars): US equity DAILY 1998-01..2021-03 for SPY, AAPL, IBM, BAC, GOOG,
+    QQQ, IWM and a few others; MINUTE data only for 2013-10-04..2013-10-11 (SPY,
+    AAPL, IBM, BAC and a few others). Prefer Resolution.DAILY with dates inside
+    1998-2021 unless testing intraday logic in that one October 2013 week.
+
+    Runs synchronously -- typically tens of seconds. On failure the engine log
+    tail comes back so the algorithm can be fixed and resubmitted.
     """
     match = _CLASS_RE.search(code)
     if not match:
