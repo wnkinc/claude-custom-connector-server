@@ -21,12 +21,11 @@ agent has executed.
 
 ## Tools
 
-- `backtest(code, name?, parameters?, timeout_seconds?)` — run a Python QCAlgorithm,
+- `backtest(code, name?, timeout_seconds?)` — run a Python QCAlgorithm,
   synchronously; returns the statistics map (or the engine log tail on failure, so
-  the agent can iterate). `parameters` surface as `self.get_parameter(...)`.
-- `backtest_result(id, include_equity_curve?)` — full stats, trade/portfolio
-  statistics, orders, optional downsampled equity curve.
-- `list_backtests()` — id/name/status/stats of every run on this server.
+  the agent can iterate).
+- `backtest_result(id)` — full stats, trade/portfolio statistics, and orders of a
+  past run (run folders persist on the state volume).
 
 ## Scope
 

@@ -1,14 +1,17 @@
 """lean -- QuantConnect Lean backtesting over MCP.
 
 The engine has ONE operation: run an algorithm file against a config and emit a
-results JSON. The agent writes the QCAlgorithm Python class itself (the whole Lean
-API surface lives in that code, not in tools here), so this server only owns the
-invocation path: write algorithm -> generate config -> run the launcher as a
-subprocess -> parse the results. No lean-cli anywhere: the CLI drives Docker, which
-a walled container must not do; we call the compiled launcher directly.
+folder of result files. The agent writes the QCAlgorithm Python class itself (the
+whole Lean API surface lives in that code, not in tools here), so this server only
+owns the invocation path: write algorithm -> write config -> run the launcher as a
+subprocess -> read the results JSON back. No lean-cli: it runs backtests by
+launching Docker containers, which a walled container must not do.
 
 Runs INSIDE the pinned quantconnect/lean image (see Dockerfile), so the engine,
-its miniconda Python, and the sample data under /Lean/Data are all present.
+its miniconda Python, and the sample data under /Lean/Data are all present. Each
+run gets a folder under BACKTESTS (lean-cli's backtests/<timestamp>/ convention,
+rooted in the tool's state volume): the algorithm, the config, the engine log, and
+the results JSON.
 """
 
 import json
@@ -33,7 +36,6 @@ DATA_FOLDER = os.getenv("LEAN_DATA_FOLDER", "/Lean/Data")
 BACKTESTS = Path(os.getenv("LEAN_BACKTESTS_DIR", "/app/state/backtests"))
 MAX_RUN_SECONDS = int(os.getenv("LEAN_MAX_RUN_SECONDS", "1800"))
 LOG_TAIL_LINES = 60
-MAX_EQUITY_POINTS = 500
 
 mcp = FastMCP(name="lean")
 
@@ -41,12 +43,13 @@ _CLASS_RE = re.compile(r"^class\s+(\w+)\s*\([^)]*QCAlgorithm[^)]*\)", re.MULTILI
 _SLUG_RE = re.compile(r"[^a-zA-Z0-9-]+")
 
 
-def _build_config(job: Path, backtest_id: str, class_name: str, parameters: dict) -> dict:
-    """A complete backtesting config for the launcher (what lean-cli would generate).
+def _build_config(job: Path, backtest_id: str, class_name: str) -> dict:
+    """The launcher's backtesting config: Lean's shipped Launcher/config.json
+    defaults (handler names verbatim) + this run's algorithm and output paths.
 
-    All paths are absolute because the subprocess runs with cwd=job (the only
-    writable place: the engine drops log.txt in cwd); composer-dll-directory must
-    then point back at the launcher bin so plugin assemblies still resolve.
+    Paths are absolute because the subprocess runs with cwd=job (the engine drops
+    log.txt in cwd, and job is the writable place); composer-dll-directory then
+    points back at the launcher bin so its plugin assemblies still resolve.
     """
     return {
         "environment": "backtesting",
@@ -60,8 +63,6 @@ def _build_config(job: Path, backtest_id: str, class_name: str, parameters: dict
         "object-store-root": str(job / "storage"),
         "debugging": False,
         "show-missing-data-logs": True,
-        # get_parameter() values arrive as strings, same as the cloud.
-        "parameters": {str(k): str(v) for k, v in parameters.items()},
         "log-handler": "QuantConnect.Logging.CompositeLogHandler",
         "messaging-handler": "QuantConnect.Messaging.Messaging",
         "job-queue-handler": "QuantConnect.Queues.JobQueue",
@@ -94,48 +95,16 @@ def _tail(path: Path, lines: int = LOG_TAIL_LINES) -> str:
     return "\n".join(path.read_text(errors="replace").splitlines()[-lines:])
 
 
-def _read_meta(job: Path) -> dict | None:
-    meta = job / "meta.json"
-    if not meta.exists():
-        return None
-    try:
-        return json.loads(meta.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def _write_meta(job: Path, meta: dict) -> None:
-    (job / "meta.json").write_text(json.dumps(meta, indent=2))
-
-
-def _result_path(job: Path, backtest_id: str) -> Path:
-    return job / f"{backtest_id}.json"
-
-
-def _downsample(values: list, limit: int = MAX_EQUITY_POINTS) -> list:
-    if len(values) <= limit:
-        return values
-    step = len(values) / limit
-    sampled = [values[int(i * step)] for i in range(limit)]
-    sampled[-1] = values[-1]  # always keep the final point
-    return sampled
-
-
 @mcp.tool
-def backtest(
-    code: str,
-    name: str = "",
-    parameters: dict | None = None,
-    timeout_seconds: int = 600,
-) -> dict:
+def backtest(code: str, name: str = "", timeout_seconds: int = 600) -> dict:
     """Run a Lean backtest of a Python QCAlgorithm and return its statistics.
 
     ``code`` is a complete algorithm module defining exactly one
     ``class <Name>(QCAlgorithm)`` (start with ``from AlgorithmImports import *``;
-    set start/end dates, cash, and universe inside ``initialize``). ``parameters``
-    become ``self.get_parameter(...)`` values. Data available: the Lean sample set
-    (e.g. SPY equity minute/daily). Runs synchronously -- typically tens of
-    seconds. Fetch full results later with backtest_result(id).
+    set start/end dates, cash, and universe inside ``initialize``). Data available:
+    the Lean sample set (e.g. SPY equity minute/daily). Runs synchronously --
+    typically tens of seconds. On failure the engine log tail comes back so the
+    algorithm can be fixed and resubmitted.
     """
     match = _CLASS_RE.search(code)
     if not match:
@@ -153,17 +122,8 @@ def backtest(
     job.mkdir(parents=True)
 
     (job / "main.py").write_text(code)
-    config = _build_config(job, backtest_id, class_name, parameters or {})
+    config = _build_config(job, backtest_id, class_name)
     (job / "config.json").write_text(json.dumps(config, indent=2))
-
-    meta = {
-        "id": backtest_id,
-        "name": name or class_name,
-        "class": class_name,
-        "created": datetime.now(timezone.utc).isoformat(),
-        "status": "running",
-    }
-    _write_meta(job, meta)
 
     timeout = max(30, min(timeout_seconds, MAX_RUN_SECONDS))
     console = job / "console.log"
@@ -175,8 +135,6 @@ def backtest(
                 cwd=job, stdout=out, stderr=subprocess.STDOUT, timeout=timeout,
             )
     except subprocess.TimeoutExpired:
-        meta["status"] = "timeout"
-        _write_meta(job, meta)
         return {
             "status": "timeout",
             "id": backtest_id,
@@ -184,10 +142,8 @@ def backtest(
             "log_tail": _tail(console),
         }
 
-    result_file = _result_path(job, backtest_id)
+    result_file = job / f"{backtest_id}.json"
     if proc.returncode != 0 or not result_file.exists():
-        meta["status"] = "failed"
-        _write_meta(job, meta)
         return {
             "status": "failed",
             "id": backtest_id,
@@ -197,37 +153,32 @@ def backtest(
         }
 
     data = json.loads(result_file.read_text())
-    stats = data.get("statistics", {})
-    meta.update(status="completed", statistics=stats)
-    _write_meta(job, meta)
     return {
         "status": "completed",
         "id": backtest_id,
-        "statistics": stats,
+        "statistics": data.get("statistics", {}),
         "runtime_statistics": data.get("runtimeStatistics", {}),
         "orders": len(data.get("orders", {})),
     }
 
 
 @mcp.tool
-def backtest_result(backtest_id: str, include_equity_curve: bool = False) -> dict:
-    """Full results of a finished backtest: statistics, per-trade/portfolio stats,
-    order events, and (optionally) the equity curve downsampled to ~500 points."""
+def backtest_result(backtest_id: str) -> dict:
+    """Full results of a past backtest: statistics, trade/portfolio breakdowns,
+    and order events. Run folders under the state volume persist across restarts."""
     job = BACKTESTS / backtest_id
-    result_file = _result_path(job, backtest_id)
+    result_file = job / f"{backtest_id}.json"
     if not result_file.exists():
-        meta = _read_meta(job)
         return {
-            "status": (meta or {}).get("status", "not_found"),
+            "status": "not_found",
             "id": backtest_id,
-            "error": "No results file for this id."
-            + ("" if meta else " Unknown backtest id; see list_backtests()."),
+            "error": "No results for this id (unknown, failed, or timed out).",
             "log_tail": _tail(job / "log.txt"),
         }
 
     data = json.loads(result_file.read_text())
     total = data.get("totalPerformance") or {}
-    out = {
+    return {
         "status": "completed",
         "id": backtest_id,
         "statistics": data.get("statistics", {}),
@@ -236,25 +187,6 @@ def backtest_result(backtest_id: str, include_equity_curve: bool = False) -> dic
         "portfolio_statistics": total.get("portfolioStatistics", {}),
         "orders": list(data.get("orders", {}).values()),
     }
-    if include_equity_curve:
-        series = (
-            data.get("charts", {}).get("Strategy Equity", {}).get("series", {})
-            .get("Equity", {}).get("values", [])
-        )
-        out["equity_curve"] = _downsample(series)
-    return out
-
-
-@mcp.tool
-def list_backtests() -> list[dict]:
-    """All backtests on this server (newest first): id, name, status, key stats."""
-    entries = []
-    if BACKTESTS.exists():
-        for job in sorted(BACKTESTS.iterdir(), reverse=True):
-            meta = _read_meta(job)
-            if meta:
-                entries.append(meta)
-    return entries
 
 
 def main() -> None:
