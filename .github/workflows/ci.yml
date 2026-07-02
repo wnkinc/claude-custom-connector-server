@@ -18,12 +18,12 @@ jobs:
   pre-commit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       # Hook envs (incl. the gitleaks Go build) are a one-time cost with this cache.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
@@ -34,24 +34,32 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        tool: [data]  # xmcp/lean join the matrix when they grow tests
+        include:
+          - tests: tools/data
+            lock: tools/data/requirements.lock
+          # security/ has no lock of its own; xmcp is the max-posture tool, so its
+          # lock covers every shared layer (auth + approval + guardrail).
+          - tests: security
+            lock: tools/xmcp/requirements.lock
+    name: pytest (${{ matrix.tests }})
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"  # matches the tool containers
           cache: pip
-          cache-dependency-path: tools/${{ matrix.tool }}/requirements.lock
+          cache-dependency-path: ${{ matrix.lock }}
       # Full lockfile, not a test subset: doubles as "the lock still installs cleanly".
-      # pytest itself is dev-only and deliberately not in the runtime lock.
-      - run: pip install -r tools/${{ matrix.tool }}/requirements.lock pytest
-      - run: pytest -q
-        working-directory: tools/${{ matrix.tool }}
+      # The locks are hash-pinned, so pytest (dev-only, deliberately not in them)
+      # must be a separate resolution or --require-hashes rejects it.
+      - run: pip install -r ${{ matrix.lock }}
+      - run: pip install pytest
+      - run: pytest ${{ matrix.tests }} -q
 
   compose-validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The real .env files are gitignored secrets, but compose hard-fails on a
       # missing env_file -- empty stubs are enough for config validation.
       - run: for t in xmcp data lean; do touch tools/$t/.env; done
