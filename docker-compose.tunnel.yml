@@ -33,3 +33,7 @@ services:
   data:
     environment:
       MCP_AUTH_ENABLED: "1"
+
+  lean:
+    environment:
+      MCP_AUTH_ENABLED: "1"

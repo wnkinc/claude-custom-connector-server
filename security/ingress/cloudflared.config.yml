@@ -23,6 +23,8 @@ ingress:
     service: http://xmcp:8061
   - hostname: data.secure-agentic-engineering.com
     service: http://data:8062
+  - hostname: lean.secure-agentic-engineering.com
+    service: http://lean:8064
 
   # Everything else is refused.
   - service: http_status:404
