@@ -5,21 +5,21 @@ standardized DataFrame **as-is** (OpenBB's own schema + ``date`` index). No pers
 no MCP — just the fetch. Adding a capability = add a function here (+ a tool in
 ``server.py``); the persistence layer (``lake.py``) is untouched.
 
-Each *data type* is a command extension (``openbb-equity``, ``openbb-crypto``); each
-*data source* is a provider extension (``openbb-yfinance``, ``openbb-tiingo``). Because
-OpenBB standardizes across providers, a new provider for an existing data type is nearly
-free — it's just another ``provider=`` value on the same feed fn, no new code. Re-run the
-accessor prebuild after adding any extension.
+This tool's mission is feeding the lean backtesting tool, and lean's exporter is
+crypto-only today — so crypto is the only capability. Equity/FX fetchers (and the
+Databento SDK path) existed here before the refit; recover them from git history
+if the equity fork (QC data vs adjusted-shortcut) ever lands.
 
-Keyed providers (e.g. tiingo) need a token. OpenBB does NOT read credential env vars, so
+Keyed providers (tiingo) need a token. OpenBB does NOT read credential env vars, so
 we inject them from the env (``.env``) onto ``obb.user.credentials`` — see
-``_CREDENTIALS`` / ``_apply_credentials``. yfinance needs no key.
+``_CREDENTIALS`` / ``_apply_credentials``.
 
-Tiingo's intraday endpoint caps each response at ~10k bars, anchored to ``end`` (it returns
-the most recent ≤10k bars ending at ``end``). To pull a longer intraday window we PAGE it:
-``_bars`` walks backward, repeatedly fetching the next ≤10k-bar window ending just before
-the earliest bar already held, until it reaches ``start``. Daily+ bars never hit the cap, so
-they pass straight through. This is the only reason ``feeds`` does more than one fetch.
+Tiingo's intraday endpoint caps each response at ~10k bars, anchored to ``end`` (it
+returns the most recent ≤10k bars ending at ``end``). To pull a longer intraday window
+we PAGE it: ``_bars`` walks backward, repeatedly fetching the next ≤10k-bar window
+ending just before the earliest bar already held, until it reaches ``start``. Daily+
+bars never hit the cap, so they pass straight through. This is the only reason
+``feeds`` does more than one fetch.
 """
 from __future__ import annotations
 
@@ -28,9 +28,7 @@ import os
 
 import pandas as pd
 
-# Tiingo is the fixed provider for equity + crypto (deeper intraday history than yfinance,
-# same daily) — the tools don't expose a provider choice. yfinance stays installed and
-# reachable in code via provider="yfinance", but nothing uses it by default.
+# Tiingo is the fixed provider (deep crypto intraday history; keyed).
 DEFAULT_PROVIDER = "tiingo"
 
 # env var -> the obb.user.credentials attribute it populates. Add a keyed provider here.
@@ -39,13 +37,6 @@ _CREDENTIALS = {"TIINGO_API_KEY": "tiingo_token"}
 # Tiingo intraday per-response bar cap, and the intervals it applies to (daily+ never cap).
 _TIINGO_CAP = 10000
 _TIINGO_INTRADAY = frozenset({"1m", "2m", "5m", "15m", "30m", "60m", "1h", "90m"})
-
-# Databento (opt-in alt equity source; direct SDK, not OpenBB). It offers only these four
-# OHLCV bar sizes — map our interval vocabulary onto its schema names. Dataset is fixed to
-# EQUS.MINI: Databento's consolidated US-equity feed (Nasdaq + NYSE + other venues), one
-# clean bar per interval (history from 2023-03-28).
-_DATABENTO_SCHEMA = {"1s": "ohlcv-1s", "1m": "ohlcv-1m", "1h": "ohlcv-1h", "1d": "ohlcv-1d"}
-_DATABENTO_EQUITY_DATASET = "EQUS.MINI"
 
 
 def _apply_credentials(obb) -> None:
@@ -125,63 +116,9 @@ def _bars(namespace, symbol, interval, start, end, provider) -> pd.DataFrame:
     return out
 
 
-def equity_bars(
-    symbol: str, interval: str = "1d", start: str | None = None,
-    end: str | None = None, provider: str = DEFAULT_PROVIDER,
-) -> pd.DataFrame:
-    """Historical OHLCV bars for an equity symbol (e.g. AAPL)."""
-    return _bars("equity", symbol, interval, start, end, provider)
-
-
 def crypto_bars(
     symbol: str, interval: str = "1d", start: str | None = None,
     end: str | None = None, provider: str = DEFAULT_PROVIDER,
 ) -> pd.DataFrame:
-    """Historical OHLCV bars for a crypto pair (e.g. BTC-USD)."""
+    """Historical OHLCV bars for a crypto pair (e.g. BTCUSD)."""
     return _bars("crypto", symbol, interval, start, end, provider)
-
-
-def fx_bars(
-    symbol: str, interval: str = "1d", start: str | None = None,
-    end: str | None = None, provider: str = DEFAULT_PROVIDER,
-) -> pd.DataFrame:
-    """Historical OHLC bars for an FX pair (e.g. EURUSD). FX frames carry no volume."""
-    return _bars("currency", symbol, interval, start, end, provider)
-
-
-# ── Databento (opt-in alt equity source; direct SDK, NOT OpenBB) ─────────────
-
-
-def _databento():
-    """A Databento Historical client; reads ``DATABENTO_API_KEY`` from the env (paid)."""
-    if not os.getenv("DATABENTO_API_KEY"):
-        raise ValueError(
-            "DATABENTO_API_KEY is not set — add it to .env to ingest equities from databento."
-        )
-    import databento as db
-
-    return db.Historical()  # picks up DATABENTO_API_KEY from the environment
-
-
-def databento_bars(
-    symbol: str, interval: str = "1d", start: str | None = None, end: str | None = None,
-) -> pd.DataFrame:
-    """Equity OHLCV bars from Databento (direct SDK) — same signature as ``equity_bars``.
-
-    Databento isn't an OpenBB provider, so this calls its SDK directly. It offers only
-    1s/1m/1h/1d OHLCV bars (``interval`` is mapped to its ``ohlcv-*`` schema) on the
-    consolidated US-equity dataset (EQUS.MINI — Nasdaq + NYSE + other venues, one bar per
-    interval), and requires a ``start``. Returns the SDK frame as-is (``ts_event``-indexed,
-    carrying the ticker ``symbol``). Uses default symbology (``raw_symbol`` in).
-    """
-    schema = _DATABENTO_SCHEMA.get(interval)
-    if schema is None:
-        raise ValueError(
-            f"databento offers only {sorted(_DATABENTO_SCHEMA)} bar intervals; got {interval!r}."
-        )
-    if not start:
-        raise ValueError("databento requires an explicit start date (YYYY-MM-DD).")
-    store = _databento().timeseries.get_range(
-        dataset=_DATABENTO_EQUITY_DATASET, symbols=[symbol], schema=schema, start=start, end=end,
-    )
-    return store.to_df()

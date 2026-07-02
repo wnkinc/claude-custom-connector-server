@@ -1,69 +1,64 @@
-# data — historical market data (Tiingo via OpenBB) → parquet lake
+# data — the lean tool's data feeder (crypto: Tiingo via OpenBB → parquet lake → Lean)
 
-Self-hosted MCP server. Fetches OHLCV **bars** (equity, crypto, FX) from **Tiingo** via
-[OpenBB](https://openbb.co) and persists them to a plain parquet lake, de-duplicated on
-timestamp so repeated ingests accumulate history. Loopback `:8062`, OAuth-gated, behind the
-standard mcp-tools security spine.
+Self-hosted MCP server (`:8062`). Fetches crypto OHLCV **bars** from **Tiingo** via
+[OpenBB](https://openbb.co), persists them to a plain parquet lake (de-duplicated on
+timestamp so repeated ingests accumulate history), and **exports them into the Lean
+engine's data folder** — the shared `lean-data` volume the lean tool backtests against.
+That export is this tool's purpose; the lake is its staging store.
+
+Crypto-only on purpose: crypto has no corporate actions, so the lake's bars are valid
+Lean inputs as-is. Equities need factor/map files (splits/dividends) — that fork
+(QC Security Master vs adjusted-price shortcut) is deferred, and the equity/FX feeds
+that used to live here were removed with the lean refit (recover from git history).
 
 ## MCP tools
 
 | Tool | Purpose |
 |---|---|
-| `equity-ingest` | fetch equity OHLCV bars → merge into the lake |
-| `crypto-ingest` | fetch crypto OHLCV bars → merge into the lake |
-| `fx-ingest` | fetch FX (currency pair) OHLC bars → merge into the lake |
-| `data-catalog` | list what's stored — the inventory of assets/symbols/intervals (read-only) |
+| `crypto-ingest` | fetch crypto OHLCV bars (Tiingo) → merge into the lake |
+| `data-catalog` | list what's stored — the lake inventory (read-only) |
 | `data-read` | read one stored series back out of the lake (read-only) |
+| `lean-export` | write a stored series into the Lean data folder (the bridge) |
 
-**`*-ingest` args:** `symbol` (Tiingo-style: crypto/FX are hyphen-less — `BTCUSD`, `EURUSD`),
-`interval?="1d"` (`1m/2m/5m/15m/30m/60m/90m/1h/1d/5d/1W/1M/1Q`), `start?`/`end?` (ISO
-`YYYY-MM-DD`), `refresh?=false` (replace instead of merge). `equity-ingest` also takes
-`source?="tiingo"` — pass `"databento"` only when explicitly asked for it by name (paid SDK,
-consolidated US equities, 1s/1m/1h/1d only, `start` required, needs `DATABENTO_API_KEY`).
-**`data-catalog`** is discovery — call it to see what's available: every stored dataset
-(`asset/source/symbol/interval` + row count + date span), optionally narrowed by `asset`
-(`equity`|`crypto`|`fx`). **`data-read`** reads one series: `asset`, `symbol`, `interval?="1d"`,
-`source?="tiingo"` (must match how it was ingested), `tail?=10`. Bars are keyed by interval AND
-source; a read miss returns what *is* stored for that symbol, so the LLM can discover-then-drill
-rather than dead-end.
+The agent's pipeline: `crypto-ingest` → `lean-export` → backtest (lean tool). What the
+engine can actually backtest is reported by the **lean** tool's `available_data`, not
+`data-catalog` (lake ≠ exported).
 
-Deep **intraday** pulls page the provider's per-request cap automatically. On Tiingo's free
-tier a multi-year 1m pull can exhaust the hourly request limit and return a **PARTIAL** result
-— just re-run later (keep `refresh=false`) and the lake merge extends coverage.
+**`crypto-ingest` args:** `symbol` (Tiingo-style, hyphen-less: `BTCUSD`), `interval?="1d"`,
+`start?`/`end?` (ISO `YYYY-MM-DD`), `refresh?=false` (replace instead of merge). Deep
+**intraday** pulls page Tiingo's per-request cap automatically; on the free tier a deep
+pull can return a **PARTIAL** result — re-run later (keep `refresh=false`) and the merge
+extends coverage. **`lean-export` args:** `symbol`, `interval?="1d"` (`1d`→daily,
+`1h`→hour, `1m`→minute), `source?="tiingo"`, `market?="coinbase"` (the Lean market the
+files register under; the backtest must subscribe with the same one).
 
 ## Design
 
-Three layers, so the owned surface stays constant as capabilities grow:
+Four layers, so the owned surface stays constant as capabilities grow:
 
 | File | Job |
 |---|---|
 | `server.py` | thin `@mcp.tool` per capability (wires feed → lake → text) |
-| `feeds.py` | thin per-capability OpenBB fetch fns; pages Tiingo's intraday cap |
-| `lake.py` | generic parquet persist/merge/read, keyed by path segments (never changes per capability) |
+| `feeds.py` | thin OpenBB fetch fns; pages Tiingo's intraday cap |
+| `lake.py` | generic parquet persist/merge/read, keyed by path segments |
+| `lean_export.py` | lake → Lean on-disk format (atomic, world-readable zips) |
 
-OpenBB standardizes fetch + schema across providers, so a **new data type** = a command ext
-(`openbb-equity`/`-crypto`/`-currency`) + a `feeds` fn + a tool; a **new OpenBB source** =
-just a provider ext, used via `provider=` (no new code). Keyed providers (Tiingo) need a
-token — `feeds._apply_credentials` injects `TIINGO_API_KEY` onto `obb.user.credentials`, since
-OpenBB doesn't read credential env vars. `openbb-yfinance` stays installed/reachable in code
-but no tool uses it.
+The export format is **Lean's contract, not ours** — verified byte-identical against the
+samples bundled in the engine image (see `test_data.py`'s golden tests). Writes are
+atomic (tmp + rename) so the engine never reads a half-written zip, and `0644` because
+the lean container reads as a different uid (the shared `leandata` group, gid 1500,
+handles the directories).
 
-A source OpenBB doesn't front uses its **own SDK** behind the same `feeds` seam:
-`feeds.databento_bars` (Databento) is an opt-in alternative for `equity-ingest`
-(`source="databento"`), keyed into the lake under its own `databento` namespace. The lake
-doesn't care whether a feed is OpenBB- or SDK-backed.
-
-## The store
-
-Self-describing layout — the path is the metadata (first segment = dataset namespace):
+## The stores
 
 ```
-<DATA_ROOT>/<asset>/<source>/<symbol>/<interval>.parquet   e.g. var/data/fx/tiingo/EURUSD/1d.parquet
+<DATA_ROOT>/<asset>/<source>/<symbol>/<interval>.parquet        # the lake (staging)
+<LEAN_DATA_ROOT>/crypto/<market>/<res>/<symbol>_trade.zip       # the Lean export (consumed)
 ```
 
-Plain parquet (pandas + pyarrow), readable by any consumer; frames are stored **as-is** in
-the source's own schema. Each ingest merges into the file de-dup'd on the timestamp index;
-`refresh=true` replaces.
+`DATA_ROOT` is this tool's state volume; `LEAN_DATA_ROOT` is the shared `lean-data`
+volume (the lean container mounts it as its `data-folder`, seeded with only the engine's
+two metadata databases — zero bundled price data).
 
 ## Setup & run
 
@@ -78,26 +73,23 @@ cp env.example .env                   # set TIINGO_API_KEY (+ Google creds for p
 
 OpenBB code-gens its `obb` accessor at import; the image prebuilds it at build time and
 freezes it (`OPENBB_AUTO_BUILD=false`) so it never rebuilds on the read-only rootfs.
-Rerun the prebuild only after adding/removing an extension. To publish: allowlist hosts
-in `security/egress-proxy/allowlist/data.txt` and add a route in
-`security/ingress/cloudflared.config.yml`, then `docker compose up -d --build data`.
+Rerun the prebuild only after adding/removing an extension.
 
 ## Env vars
 
 | Var | Default | Meaning |
 |---|---|---|
-| `TIINGO_API_KEY` | _(empty)_ | **required** — Tiingo is the default provider; empty → ingest fails |
-| `DATABENTO_API_KEY` | _(empty)_ | optional — only for `equity-ingest source="databento"` |
+| `TIINGO_API_KEY` | _(empty)_ | **required** — the ingest provider; empty → ingest fails |
 | `MCP_PORT` | `8062` | MCP port |
 | `MCP_AUTH_ENABLED` | `0` | `1` = require Google OAuth (public serving) |
 | `DATA_ROOT` | `/app/state/data` | parquet lake root (writable state volume) |
+| `LEAN_DATA_ROOT` | `/lean-data` | Lean export target (the shared volume) |
 | `OPENBB_AUTO_BUILD` | `false` | freeze the prebuilt accessor; never rebuild at import |
 | `HOME` | `/app/state` | OpenBB writes `$HOME/.openbb_platform`; must be writable |
 
 ## Egress
 
 Behind the egress wall, allowed hosts live in `security/egress-proxy/allowlist/data.txt`:
-`api.tiingo.com` (default data), `hist.databento.com` (only when `source="databento"`), + the
-Google OAuth hosts (token/JWKS when `MCP_AUTH_ENABLED=1`). Yahoo hosts remain for the
-still-installed `openbb-yfinance`. OpenBB does no network at import. Find misses via
-`TCP_DENIED` in `/var/log/squid/access.log`.
+`api.tiingo.com` + the Google OAuth hosts (token/JWKS when `MCP_AUTH_ENABLED=1`).
+Nothing else — the export writes to a local volume. Find misses via `TCP_DENIED` in the
+egress log.

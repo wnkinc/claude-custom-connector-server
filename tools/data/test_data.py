@@ -1,10 +1,12 @@
-"""Tests for the persistence (lake) and OpenBB-fetch (feeds) layers.
+"""Tests for the persistence (lake), OpenBB-fetch (feeds), and Lean-export layers.
 
 ``lake`` is exercised against an in-process tmp lake (no network). ``feeds`` is tested
 with a fake ``obb`` so the right OpenBB endpoint + args are asserted without hitting
-Yahoo Finance.
+the provider. ``lean_export`` is asserted against golden lines taken verbatim from the
+data bundled in the quantconnect/lean engine image — the format is Lean's contract.
 """
 
+import zipfile
 from types import SimpleNamespace
 
 import pandas as pd
@@ -12,6 +14,7 @@ import pytest
 
 import feeds
 import lake
+import lean_export
 
 
 def _frame(dates, close):
@@ -34,31 +37,31 @@ def _frame(dates, close):
 
 def test_path_for_layout(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    assert lake.path_for("equity", "yfinance", "AAPL", "1d") == (
-        tmp_path / "equity" / "yfinance" / "AAPL" / "1d.parquet"
+    assert lake.path_for("crypto", "tiingo", "BTCUSD", "1d") == (
+        tmp_path / "crypto" / "tiingo" / "BTCUSD" / "1d.parquet"
     )
 
 
 def test_path_for_safe_symbol(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     # '/' is the one genuinely problematic char on Linux (e.g. "BTC/USD").
-    assert "BTC_USD" in str(lake.path_for("crypto", "yfinance", "BTC/USD", "1d"))
+    assert "BTC_USD" in str(lake.path_for("crypto", "tiingo", "BTC/USD", "1d"))
 
 
 def test_ingest_persists_and_read_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    s = lake.ingest(("equity", "yfinance", "AAPL", "1d"), _frame(["2024-01-02", "2024-01-03"], [1.5, 2.0]))
-    assert s["key"] == "equity/yfinance/AAPL/1d"
+    s = lake.ingest(("crypto", "tiingo", "BTCUSD", "1d"), _frame(["2024-01-02", "2024-01-03"], [1.5, 2.0]))
+    assert s["key"] == "crypto/tiingo/BTCUSD/1d"
     assert s["rows"] == 2 and s["fetched"] == 2 and s["added"] == 2
 
-    back = lake.read("equity", "yfinance", "AAPL", "1d")
+    back = lake.read("crypto", "tiingo", "BTCUSD", "1d")
     assert list(back["close"]) == [1.5, 2.0]
     assert back.index.name == "date"
 
 
 def test_ingest_merges_dedupes_and_appends(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    key = ("equity", "yfinance", "AAPL", "1d")
+    key = ("crypto", "tiingo", "BTCUSD", "1d")
 
     lake.ingest(key, _frame(["2024-01-01", "2024-01-02"], [1.0, 2.0]))
     # Re-fetch overlaps 01-02 (corrected close) and adds 01-03.
@@ -72,7 +75,7 @@ def test_ingest_merges_dedupes_and_appends(tmp_path, monkeypatch):
 
 def test_refresh_replaces_stored_file(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    key = ("crypto", "yfinance", "BTC-USD", "1d")
+    key = ("crypto", "tiingo", "BTCUSD", "1d")
 
     lake.ingest(key, _frame(["2024-01-01", "2024-01-02"], [1.0, 2.0]))
     s = lake.ingest(key, _frame(["2024-06-01"], [9.0]), refresh=True)
@@ -84,39 +87,39 @@ def test_refresh_replaces_stored_file(tmp_path, monkeypatch):
 def test_ingest_empty_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     with pytest.raises(ValueError):
-        lake.ingest(("equity", "yfinance", "AAPL", "1d"), _frame([], []))
+        lake.ingest(("crypto", "tiingo", "BTCUSD", "1d"), _frame([], []))
 
 
 def test_read_missing_returns_none(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    assert lake.read("equity", "yfinance", "NOPE", "1d") is None
+    assert lake.read("crypto", "tiingo", "NOPE", "1d") is None
 
 
 def test_catalog_lists_keys_with_rows_and_span(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    lake.ingest(("equity", "tiingo", "AAPL", "1m"), _frame(["2024-01-02", "2024-01-03"], [1.0, 2.0]))
+    lake.ingest(("crypto", "tiingo", "ETHUSD", "1m"), _frame(["2024-01-02", "2024-01-03"], [1.0, 2.0]))
     lake.ingest(("crypto", "tiingo", "BTCUSD", "1d"), _frame(["2024-01-02"], [5.0]))
 
     cat = {e["key"]: e for e in lake.catalog()}
-    assert set(cat) == {"equity/tiingo/AAPL/1m", "crypto/tiingo/BTCUSD/1d"}
-    aapl = cat["equity/tiingo/AAPL/1m"]
-    assert aapl["rows"] == 2  # from the parquet footer, no data load
-    assert aapl["start"].startswith("2024-01-02") and aapl["end"].startswith("2024-01-03")
+    assert set(cat) == {"crypto/tiingo/ETHUSD/1m", "crypto/tiingo/BTCUSD/1d"}
+    eth = cat["crypto/tiingo/ETHUSD/1m"]
+    assert eth["rows"] == 2  # from the parquet footer, no data load
+    assert eth["start"].startswith("2024-01-02") and eth["end"].startswith("2024-01-03")
 
 
 def test_catalog_prefix_narrows_to_namespace(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    lake.ingest(("equity", "tiingo", "AAPL", "1m"), _frame(["2024-01-02"], [1.0]))
     lake.ingest(("crypto", "tiingo", "BTCUSD", "1d"), _frame(["2024-01-02"], [5.0]))
+    lake.ingest(("scratch", "tiingo", "X", "1d"), _frame(["2024-01-02"], [1.0]))
 
-    keys = [e["key"] for e in lake.catalog("equity")]
-    assert keys == ["equity/tiingo/AAPL/1m"]
+    keys = [e["key"] for e in lake.catalog("crypto")]
+    assert keys == ["crypto/tiingo/BTCUSD/1d"]
 
 
 def test_catalog_empty_lake_is_empty_list(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     assert lake.catalog() == []
-    assert lake.catalog("equity") == []
+    assert lake.catalog("crypto") == []
 
 
 # ── server: data-catalog (inventory) vs data-read (series) ───────────────────
@@ -126,20 +129,10 @@ def test_data_catalog_lists_everything(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     import server
 
-    lake.ingest(("equity", "tiingo", "AAPL", "1m"), _frame(["2024-01-02"], [1.0]))
-    lake.ingest(("equity", "databento", "AAPL", "1m"), _frame(["2024-01-02"], [1.0]))
+    lake.ingest(("crypto", "tiingo", "BTCUSD", "1d"), _frame(["2024-01-02"], [1.0]))
+    lake.ingest(("crypto", "tiingo", "ETHUSD", "1h"), _frame(["2024-01-02"], [1.0]))
     out = server.data_catalog()  # whole lake
-    assert "equity/tiingo/AAPL/1m" in out and "equity/databento/AAPL/1m" in out
-
-
-def test_data_catalog_narrows_by_asset(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    import server
-
-    lake.ingest(("equity", "tiingo", "AAPL", "1m"), _frame(["2024-01-02"], [1.0]))
-    lake.ingest(("crypto", "tiingo", "BTCUSD", "1d"), _frame(["2024-01-02"], [5.0]))
-    out = server.data_catalog("equity")
-    assert "equity/tiingo/AAPL/1m" in out and "BTCUSD" not in out
+    assert "crypto/tiingo/BTCUSD/1d" in out and "crypto/tiingo/ETHUSD/1h" in out
 
 
 def test_data_catalog_empty_lake(tmp_path, monkeypatch):
@@ -153,22 +146,22 @@ def test_data_read_miss_hints_what_is_stored(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     import server
 
-    lake.ingest(("equity", "tiingo", "AAPL", "1m"), _frame(["2024-01-02"], [1.0]))
-    # ask for the default 1d/tiingo that doesn't exist -> hint points at the stored 1m
-    out = server.data_read("equity", "AAPL")
-    assert "No equity/tiingo/AAPL/1d" in out and "equity/tiingo/AAPL/1m" in out
+    lake.ingest(("crypto", "tiingo", "BTCUSD", "1m"), _frame(["2024-01-02"], [1.0]))
+    # ask for the default 1d that doesn't exist -> hint points at the stored 1m
+    out = server.data_read("crypto", "BTCUSD")
+    assert "No crypto/tiingo/BTCUSD/1d" in out and "crypto/tiingo/BTCUSD/1m" in out
 
 
 def test_data_read_hit_returns_rows(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     import server
 
-    lake.ingest(("equity", "tiingo", "AAPL", "1m"), _frame(["2024-01-02", "2024-01-03"], [1.0, 2.0]))
-    out = server.data_read("equity", "AAPL", "1m", "tiingo", tail=1)
-    assert "1m equity bars for AAPL (tiingo)" in out
+    lake.ingest(("crypto", "tiingo", "BTCUSD", "1m"), _frame(["2024-01-02", "2024-01-03"], [1.0, 2.0]))
+    out = server.data_read("crypto", "BTCUSD", "1m", "tiingo", tail=1)
+    assert "1m crypto bars for BTCUSD (tiingo)" in out
 
 
-# ── feeds: OpenBB endpoint wrappers (fake obb, no network) ───────────────────
+# ── feeds: OpenBB endpoint wrapper (fake obb, no network) ────────────────────
 
 
 def _fake_obb(caps, df):
@@ -181,47 +174,17 @@ def _fake_obb(caps, df):
     return SimpleNamespace(**{ns: endpoint(cap) for ns, cap in caps.items()})
 
 
-def _caps():
-    return {"equity": {}, "crypto": {}, "currency": {}}
-
-
-def test_equity_bars_calls_equity_endpoint(monkeypatch):
-    caps = _caps()
+def test_crypto_bars_calls_crypto_endpoint(monkeypatch):
+    caps = {"crypto": {}}
     df = _frame(["2024-01-02"], [1.0])
     monkeypatch.setattr(feeds, "_obb", lambda: _fake_obb(caps, df))
 
-    out = feeds.equity_bars("AAPL", "1d", "2024-01-01", "2024-01-10")
+    out = feeds.crypto_bars("BTCUSD", "1d", "2024-01-01", "2024-01-10")
     assert out is df
-    assert caps["crypto"] == {} and caps["currency"] == {}  # only equity touched
-    assert caps["equity"] == {
-        "symbol": "AAPL", "interval": "1d", "start_date": "2024-01-01",
+    assert caps["crypto"] == {
+        "symbol": "BTCUSD", "interval": "1d", "start_date": "2024-01-01",
         "end_date": "2024-01-10", "provider": "tiingo",  # the fixed default provider
     }
-
-
-def test_crypto_bars_calls_crypto_endpoint(monkeypatch):
-    caps = _caps()
-    monkeypatch.setattr(feeds, "_obb", lambda: _fake_obb(caps, _frame(["2024-01-02"], [1.0])))
-
-    feeds.crypto_bars("BTC-USD", provider="yfinance")
-    assert caps["equity"] == {} and caps["currency"] == {}
-    assert caps["crypto"]["symbol"] == "BTC-USD" and caps["crypto"]["provider"] == "yfinance"
-
-
-def test_fx_bars_calls_currency_endpoint(monkeypatch):
-    caps = _caps()
-    monkeypatch.setattr(feeds, "_obb", lambda: _fake_obb(caps, _frame(["2024-01-02"], [1.0])))
-
-    feeds.fx_bars("EURUSD", "1d", "2024-01-01", "2024-01-10")
-    assert caps["equity"] == {} and caps["crypto"] == {}
-    assert caps["currency"]["symbol"] == "EURUSD" and caps["currency"]["provider"] == "tiingo"
-
-
-def test_provider_passthrough(monkeypatch):
-    caps = _caps()
-    monkeypatch.setattr(feeds, "_obb", lambda: _fake_obb(caps, _frame(["2024-01-02"], [1.0])))
-    feeds.equity_bars("AAPL", provider="tiingo")  # source flows straight through to OpenBB
-    assert caps["equity"]["provider"] == "tiingo"
 
 
 # ── feeds: Tiingo intraday pagination (the 10k-bar cap walk) ──────────────────
@@ -249,7 +212,7 @@ def test_intraday_pagination_assembles_full_range(monkeypatch):
 
     monkeypatch.setattr(feeds, "_fetch", fake_fetch)
 
-    out = feeds.equity_bars("AAPL", "1m", "2021-01-01", "2021-01-25", provider="tiingo")
+    out = feeds.crypto_bars("BTCUSD", "1m", "2021-01-01", "2021-01-25", provider="tiingo")
     assert len(out) == 25  # full range assembled despite the cap
     assert out.index.is_monotonic_increasing and not out.index.duplicated().any()
     assert len(ends) >= 3  # took several backward pages, not one call
@@ -279,7 +242,7 @@ def test_intraday_pagination_partial_on_rate_limit(monkeypatch):
 
     monkeypatch.setattr(feeds, "_fetch", fake_fetch)
 
-    out = feeds.equity_bars("AAPL", "1m", "2021-01-01", "2021-01-25", provider="tiingo")
+    out = feeds.crypto_bars("BTCUSD", "1m", "2021-01-01", "2021-01-25", provider="tiingo")
     assert out.attrs.get("partial") == "Tiingo hourly rate limit reached"
     assert 0 < len(out) < 25  # kept the 2 pages fetched before the failure, not all 25
     assert not out.index.duplicated().any()
@@ -295,7 +258,7 @@ def test_daily_never_paginates(monkeypatch):
 
     monkeypatch.setattr(feeds, "_TIINGO_CAP", 5)
     monkeypatch.setattr(feeds, "_fetch", fake_fetch)
-    feeds.equity_bars("AAPL", "1d", "2024-01-01", "2024-01-20", provider="tiingo")
+    feeds.crypto_bars("BTCUSD", "1d", "2024-01-01", "2024-01-20", provider="tiingo")
     assert calls["n"] == 1  # exactly one fetch — no paging for daily
 
 
@@ -316,40 +279,63 @@ def test_apply_credentials_noop_without_env(monkeypatch):
     assert creds.tiingo_token is None
 
 
-# ── feeds: Databento (opt-in alt equity source, direct SDK) ──────────────────
+# ── lean_export: lake -> Lean on-disk format (golden lines from the engine image) ──
 
 
-def _fake_databento(capture, df):
-    """A stand-in Databento client whose timeseries.get_range records its kwargs."""
-    def get_range(**kwargs):
-        capture.update(kwargs)
-        return SimpleNamespace(to_df=lambda: df)
-    return SimpleNamespace(timeseries=SimpleNamespace(get_range=get_range))
+def _btc_golden_frame():
+    # Matches the first/last rows of the engine image's bundled
+    # crypto/coinbase/daily/btcusd_trade.zip exactly.
+    return pd.DataFrame(
+        {"open": [300.0, 6316.0], "high": [370.0, 6544.99], "low": [300.0, 6139.57],
+         "close": [370.0, 6253.67], "volume": [0.05655554, 10178.43146644]},
+        index=pd.to_datetime(["2014-12-01", "2018-08-13"]),
+    )
 
 
-def test_databento_bars_maps_interval_to_schema(monkeypatch):
-    cap = {}
-    df = _frame(["2024-01-02"], [1.0])
-    monkeypatch.setattr(feeds, "_databento", lambda: _fake_databento(cap, df))
+def test_export_daily_matches_bundled_format(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path))
+    s = lean_export.export_crypto(_btc_golden_frame(), "BTCUSD", "1d", market="coinbase")
 
-    out = feeds.databento_bars("AAPL", "1m", "2024-01-01", "2024-01-10")
-    assert out is df
-    assert cap["schema"] == "ohlcv-1m"  # interval mapped to databento schema
-    assert cap["symbols"] == ["AAPL"] and cap["dataset"] == feeds._DATABENTO_EQUITY_DATASET
-    assert cap["start"] == "2024-01-01" and cap["end"] == "2024-01-10"
-
-
-def test_databento_rejects_unsupported_interval():
-    with pytest.raises(ValueError, match="interval"):
-        feeds.databento_bars("AAPL", "5m", "2024-01-01")  # databento has no ohlcv-5m
+    assert s["dest"].endswith("crypto/coinbase/daily/btcusd_trade.zip")
+    with zipfile.ZipFile(s["dest"]) as z:
+        assert z.namelist() == ["btcusd.csv"]
+        lines = z.read("btcusd.csv").decode().splitlines()
+    assert lines[0] == "20141201 00:00,300,370,300,370,0.05655554"
+    assert lines[1] == "20180813 00:00,6316,6544.99,6139.57,6253.67,10178.43146644"
 
 
-def test_databento_requires_start():
-    with pytest.raises(ValueError, match="start"):
-        feeds.databento_bars("AAPL", "1d", None)
+def test_export_is_world_readable(tmp_path, monkeypatch):
+    # mkstemp creates 0600; the lean container reads as a DIFFERENT uid, so the
+    # exporter must chmod before the atomic rename (regression: engine got EACCES).
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path))
+    s = lean_export.export_crypto(_btc_golden_frame(), "BTCUSD", "1d")
+    from pathlib import Path
+    assert Path(s["dest"]).stat().st_mode & 0o044 == 0o044
 
 
-def test_databento_requires_api_key(monkeypatch):
-    monkeypatch.delenv("DATABENTO_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="DATABENTO_API_KEY"):
-        feeds._databento()
+def test_export_minute_layout(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path))
+    m = pd.DataFrame(
+        {"open": [100.5], "high": [101.0], "low": [100.0], "close": [100.75], "volume": [2.5]},
+        index=pd.to_datetime(["2024-03-05 00:01:00"]),
+    )
+    s = lean_export.export_crypto(m, "ETHUSD", "1m", market="coinbase")
+
+    with zipfile.ZipFile(f"{s['dest']}/20240305_trade.zip") as z:
+        assert z.namelist() == ["20240305_ethusd_minute_trade.csv"]
+        assert z.read(z.namelist()[0]).decode().splitlines() == [
+            "60000,100.5,101,100,100.75,2.5"  # ms since midnight, raw decimals
+        ]
+
+
+def test_export_rejects_unknown_interval(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path))
+    with pytest.raises(ValueError, match="resolution"):
+        lean_export.export_crypto(_btc_golden_frame(), "BTCUSD", "5m")
+
+
+def test_export_rejects_missing_columns(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEAN_DATA_ROOT", str(tmp_path))
+    bad = pd.DataFrame({"close": [1.0]}, index=pd.to_datetime(["2024-01-01"]))
+    with pytest.raises(ValueError, match="lacks columns"):
+        lean_export.export_crypto(bad, "BTCUSD", "1d")

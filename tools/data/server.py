@@ -1,24 +1,21 @@
-"""MCP server: historical market-data tools over OpenBB, persisted to a parquet lake.
+"""MCP server: the lean tool's data feeder — crypto bars from OpenBB into a parquet
+lake, exported on demand into the Lean engine's data folder.
 
-Three layers, each with one job:
+Four layers, each with one job:
   - this file (server.py) — THIN glue to MCP: one tool per capability
   - feeds.py              — THIN glue to OpenBB: one fetch fn per capability
   - lake.py               — OWNED generic parquet persist/merge/read (kind-agnostic)
+  - lean_export.py        — lake -> Lean on-disk format on the shared lean-data volume
 
-A capability tool just wires feed → lake → text. Adding one (another OpenBB endpoint)
-is a ``feeds`` fn + a tool here; ``lake.py`` never changes. All tools return trusted,
-structured market data (no guardrail).
-
-Equity + crypto are fetched from Tiingo (fixed provider — no source choice; see feeds.py).
+Crypto only: lean's exporter is crypto-only today (equities need factor/map files —
+deferred). The agent's pipeline is crypto-ingest -> lean-export -> backtest (lean tool).
+All tools return trusted, structured market data (no guardrail).
 
 Tools exposed:
-  equity-ingest — fetch equity OHLCV bars and merge them into the lake
-  crypto-ingest — fetch crypto OHLCV bars and merge them into the lake
-  fx-ingest     — fetch FX (currency pair) OHLC bars and merge them into the lake
-  data-catalog  — list what's stored (the inventory: what assets/symbols/intervals exist)
-  data-read     — read stored bars for one asset/symbol/interval back out of the lake
+  crypto-ingest — fetch crypto OHLCV bars (Tiingo) and merge them into the lake
+  data-catalog  — list what's stored (the inventory: what symbols/intervals exist)
+  data-read     — read stored bars for one symbol/interval back out of the lake
   lean-export   — write stored crypto bars into the Lean engine's data folder
-                  (the shared volume the lean tool backtests against; see lean_export.py)
 """
 import os
 import sys
@@ -93,40 +90,6 @@ def _ingest(asset: str, source: str, fetch, symbol, interval, start, end, refres
     return _fmt(summary, partial=df.attrs.get("partial"))
 
 
-@mcp.tool(name="equity-ingest")
-def equity_ingest(
-    symbol: str,
-    interval: str = "1d",
-    start: str | None = None,
-    end: str | None = None,
-    source: str = "tiingo",
-    refresh: bool = False,
-) -> str:
-    """
-    Fetch equity OHLCV bars and persist them to the parquet lake.
-
-    Fetches bars for one equity ``symbol`` (e.g. "AAPL") and merges them into the stored
-    file, de-duplicated on timestamp — so the file accumulates history across calls
-    (fetch 2024 today, 2023 tomorrow, keep both). ``interval`` is OpenBB's bar size (1m,
-    2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1W, 1M, 1Q; default 1d). ``start``/``end`` are
-    ISO dates (YYYY-MM-DD). For deep INTRADAY history just pass the full ``start``/``end``
-    range you want — the tool pages the provider's per-request cap automatically (a deep
-    pull on a free tier can return a PARTIAL result; re-run later with refresh=false and the
-    lake merges it to extend coverage).
-
-    ``source`` is the data provider: "tiingo" (DEFAULT) or "databento". Use "databento" ONLY
-    when the user explicitly asks for Databento by name — it's a separate paid SDK (needs
-    DATABENTO_API_KEY), consolidated US equities (Nasdaq + NYSE), with only 1s/1m/1h/1d bars
-    and a required ``start`` (history from 2023-03-28). Otherwise leave the default. Each source is stored in its own namespace, so
-    read it back with the same ``source``. Pass ``refresh=true`` to replace instead of merge.
-    """
-    source = (source or "tiingo").strip().lower()
-    if source not in ("tiingo", "databento"):
-        return f"Unknown source {source!r}. Use 'tiingo' (default) or 'databento'."
-    fetch = feeds.databento_bars if source == "databento" else feeds.equity_bars
-    return _ingest("equity", source, fetch, symbol, interval, start, end, refresh)
-
-
 @mcp.tool(name="crypto-ingest")
 def crypto_ingest(
     symbol: str,
@@ -138,30 +101,18 @@ def crypto_ingest(
     """
     Fetch crypto OHLCV bars from Tiingo and persist them to the parquet lake.
 
-    Same behavior as equity-ingest but for a crypto pair ``symbol`` — note Tiingo's symbol
-    format is hyphen-less (e.g. "BTCUSD", "ETHUSD", not "BTC-USD"). Merges into the stored
-    file de-duplicated on timestamp, accumulating history across calls.
-    ``interval``/``start``/``end``/``refresh`` work identically.
+    Fetches bars for one crypto pair ``symbol`` — Tiingo's symbol format is hyphen-less
+    (e.g. "BTCUSD", "ETHUSD", not "BTC-USD") — and merges them into the stored file,
+    de-duplicated on timestamp, so the file accumulates history across calls (fetch 2024
+    today, 2023 tomorrow, keep both). ``interval`` is OpenBB's bar size (1m, 5m, 15m, 30m,
+    60m, 1h, 1d, ...; default 1d; the lean pipeline exports 1d/1h/1m). ``start``/``end``
+    are ISO dates (YYYY-MM-DD). For deep INTRADAY history just pass the full range — the
+    tool pages the provider's per-request cap automatically (a deep pull on a free tier
+    can return a PARTIAL result; re-run later with refresh=false and the lake merges it to
+    extend coverage). Pass ``refresh=true`` to replace instead of merge. After ingesting,
+    make the series backtestable with lean-export.
     """
     return _ingest("crypto", feeds.DEFAULT_PROVIDER, feeds.crypto_bars, symbol, interval, start, end, refresh)
-
-
-@mcp.tool(name="fx-ingest")
-def fx_ingest(
-    symbol: str,
-    interval: str = "1d",
-    start: str | None = None,
-    end: str | None = None,
-    refresh: bool = False,
-) -> str:
-    """
-    Fetch FX (currency pair) OHLC bars from Tiingo and persist them to the parquet lake.
-
-    Same behavior as equity-ingest but for a currency pair ``symbol`` (e.g. "EURUSD",
-    "GBPUSD", "USDJPY"). FX frames carry OHLC but no volume. Merges into the stored file
-    de-duplicated on timestamp. ``interval``/``start``/``end``/``refresh`` work identically.
-    """
-    return _ingest("fx", feeds.DEFAULT_PROVIDER, feeds.fx_bars, symbol, interval, start, end, refresh)
 
 
 def _fmt_catalog(entries: list[dict], header: str) -> str:
@@ -181,9 +132,10 @@ def data_catalog(asset: str = "") -> str:
 
     Call this to answer "what data / symbols do I have?" or "what's available?". It returns
     every stored dataset as ``asset/source/symbol/interval`` with its row count and date
-    span. Pass an ``asset`` ("equity"/"crypto"/"fx") to narrow to one namespace; omit it for
-    the whole lake. This is the ONLY way to discover what's stored — once you see a dataset
-    here, read its rows with data-read. Read-only.
+    span. Pass an ``asset`` (e.g. "crypto") to narrow to one namespace; omit it for the
+    whole lake. This is the ONLY way to discover what's stored — once you see a dataset
+    here, read its rows with data-read. NOTE: the lake is the staging store; what the lean
+    tool can backtest is its available_data, not this. Read-only.
     """
     asset = (asset or "").strip().lower()
     entries = lake.catalog(asset) if asset else lake.catalog()
@@ -206,8 +158,8 @@ def data_read(
     Read a stored market-data series back out of the parquet lake. Read-only.
 
     Returns the last ``tail`` rows (default 10) of the stored bars for
-    ``asset``/``source``/``symbol``/``interval`` — ``asset`` is "equity"/"crypto"/"fx";
-    ``source`` is the provider it was ingested from ("tiingo" default, or "databento").
+    ``asset``/``source``/``symbol``/``interval`` — ``asset`` is the namespace (e.g.
+    "crypto"); ``source`` is the provider it was ingested from ("tiingo" default).
     Bars are keyed by interval AND source, so both must match what was ingested. If that
     exact series isn't stored, you get the list of what IS stored for ``symbol`` so you can
     retry with the right interval/source. To see everything available first, use data-catalog.
