@@ -9,6 +9,7 @@ updates:
       - /tools/xmcp
       - /tools/data
       - /tools/lean
+      - /tools/telegram
     schedule:
       interval: weekly
     open-pull-requests-limit: 0 # version updates off; security updates unaffected

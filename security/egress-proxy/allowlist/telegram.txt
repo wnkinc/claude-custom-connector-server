@@ -1,0 +1,9 @@
+# telegram egress allowlist (squid dstdomain). One host per line; leading dot =
+# subdomains. NOTE: the MTProto data plane is NOT here -- Telethon dials DC IPs,
+# allowed via the net_telegram dst-CIDR acl in squid.compose.conf. This file is
+# only the HTTPS-by-hostname remainder:
+# Google OAuth -- the public instance verifies tokens + fetches JWKS server-side.
+accounts.google.com
+oauth2.googleapis.com
+www.googleapis.com
+openidconnect.googleapis.com
