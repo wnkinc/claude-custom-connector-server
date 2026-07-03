@@ -1,0 +1,16 @@
+# Pinned like the other tools (see tools/xmcp/requirements.txt for why fastmcp
+# must not drift). The rest mirrors the vendored engine's [project.dependencies]
+# (the Dockerfile's vendor stage pins the checkout itself by commit + sha256):
+# the child process runs from source against THIS locked venv.
+fastmcp==3.4.2
+dotenv>=0.9.9
+httpx>=0.28.1
+mcp[cli]>=1.8.0
+nest-asyncio>=1.6.0
+python-dotenv>=1.1.0
+python-json-logger>=3.3.0
+qrcode>=8.2
+telethon>=1.42.0
+# The engine's optional 'proxy' extra -- required here, not optional: MTProto
+# reaches the egress wall only via TELEGRAM_PROXY_TYPE=http (python-socks).
+python-socks>=2.4.3

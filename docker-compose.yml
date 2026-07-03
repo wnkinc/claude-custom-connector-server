@@ -155,6 +155,44 @@ services:
       egress:
         condition: service_started
 
+  # Untrusted-output tool like xmcp: Telegram message content is a prompt-injection
+  # vector, so results screen through the guardrail. Its stdio child (the vendored
+  # engine) inherits this environment -- including the TELEGRAM_PROXY_* vars that
+  # point MTProto at the egress wall (Telethon speaks raw TCP to DC IPs; the
+  # HTTPS_PROXY env alone can't route it).
+  telegram:
+    build:
+      context: .
+      dockerfile: tools/telegram/Dockerfile
+    image: mcp-telegram
+    profiles: ["telegram"]   # opt-in: runs only when listed in COMPOSE_PROFILES (root .env)
+    restart: unless-stopped
+    env_file:
+      - path: tools/telegram/.env
+        required: false
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_TRANSPORT: http
+      MCP_AUTH_ENABLED: "0"
+      MCP_UNTRUSTED_OUTPUT: "1"
+      GUARDRAIL_URL: http://guardrail:8071
+      GUARDRAIL_ENABLED: "1"
+      TELEGRAM_PROXY_TYPE: http
+      TELEGRAM_PROXY_HOST: egress
+      TELEGRAM_PROXY_PORT: "3131"
+      HTTPS_PROXY: http://egress:3131
+      HTTP_PROXY: http://egress:3131
+      NO_PROXY: guardrail,localhost,127.0.0.1
+    volumes:
+      - telegram-state:/app/state
+    networks:
+      - internal
+    depends_on:
+      guardrail:
+        condition: service_healthy   # wait for the screener before starting
+      egress:
+        condition: service_started
+
 networks:
   # No gateway to the host/internet: containers here reach only each other + any peer
   # that also has an `edge` leg (the egress proxy). This is the wall.
@@ -163,6 +201,7 @@ networks:
   edge: {}
 
 volumes:
+  telegram-state:
   lean-state:
   guardrail-hf-cache:
   xmcp-state:
