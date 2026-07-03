@@ -78,7 +78,7 @@ def catalog(*prefix: str) -> list[dict]:
             idx = pd.read_parquet(path, columns=[]).index  # index only, no data columns
             if len(idx):
                 entry["start"], entry["end"] = idx.min().isoformat(), idx.max().isoformat()
-        except Exception:  # noqa: BLE001 — a listing must never fail on one bad file
+        except Exception:  # noqa: BLE001, S110 — a listing must never fail on one bad file
             pass
         out.append(entry)
     return out
