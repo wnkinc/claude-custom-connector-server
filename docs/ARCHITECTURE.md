@@ -66,10 +66,28 @@ The same image runs locally (`docker compose up`) and in the cloud — transport
 
 ## Adding a tool
 
-`scripts/new-tool.sh <name> <port>` stamps `tools/<name>/` (server stub wired to
-`security/serve.py`, `env.example`) + its egress allowlist. Then add a `Dockerfile`
-(copy an existing tool's) + a hashed `requirements.lock`, a service in
-`docker-compose.yml` (with its opt-in `profiles:` entry), a route in the cloudflared
-`configs:` block of `docker-compose.tunnel.yml`, the tool's name in `COMPOSE_PROFILES`
-(root `.env` + `env.example`'s list), one redirect URI on the shared Google OAuth
-client, and the custom connector in Claude.
+`scripts/new-tool.sh <name> <port>` stamps `tools/<name>/` — a `server.py` stub wired
+to `security/serve.py`, `requirements.txt`, `env.example`, and a `Dockerfile` from
+`scripts/templates/` — creates the tool's (empty, default-deny) egress allowlist, and
+inserts the compose service (opt-in `profiles:` entry + state volume) into
+`docker-compose.yml`. It then prints the follow-up steps, which stay manual on purpose
+— each is a security decision:
+
+1. **Lock deps** — `uv pip compile --generate-hashes` → `requirements.lock`
+   (CI installs locks in `--require-hashes` mode, so an unlocked dep can't merge).
+2. **Tests + CI** — write a thin `test_<name>.py` (copy an existing tool's), then the
+   three CI touchpoints in `.github/`: a pytest matrix entry in `workflows/ci.yml`,
+   the tool's directory in `dependabot.yml`, and the tool in compose-validate's
+   `.env` stub loop.
+3. **Egress** — a listener in `security/egress-proxy/squid.compose.conf` + only the
+   hosts this tool must reach in its allowlist file.
+4. **Ingress** — a hostname route in the cloudflared `configs:` block of
+   `docker-compose.tunnel.yml`, plus the service entry flipping its public posture
+   (`MCP_AUTH_ENABLED=1`, `MCP_PUBLIC_URL`).
+5. **Secrets & identity** — `cp env.example .env` and fill it; add the tool's
+   `/auth/callback` URL to the shared Google OAuth client's authorized redirect URIs.
+6. **Enable** — add the tool to `COMPOSE_PROFILES` (root `.env` + `env.example`'s
+   list), `docker compose up -d --build <name>`, then add the custom connector in
+   Claude (desktop + web).
+
+The script's own output prints the exact config snippets for each step.
