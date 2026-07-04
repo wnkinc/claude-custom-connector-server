@@ -8,9 +8,18 @@ in the root `.env` (step 2), and compose stamps it into the ingress routes and e
 tool's public URL.
 
 Prereqs on this box: Docker + compose, a Cloudflare Tunnel (id + `credentials-file` in
-`~/.cloudflared/`), domain on Cloudflare with a DNS record per tool subdomain routed to
-the tunnel (`cloudflared tunnel route dns <TUNNEL_ID> xmcp.example.com`), an X app
+`~/.cloudflared/`), domain on Cloudflare with DNS routed to the tunnel, an X app
 bearer token.
+
+**DNS — one wildcard record, once (recommended).** In the Cloudflare dashboard add
+`CNAME`, name `*`, target `<TUNNEL_ID>.cfargotunnel.com`, proxied. Every current and
+future tool subdomain then resolves with no per-tool DNS step. This adds no exposure:
+DNS does no security work in this stack — the committed tunnel overlay is the
+allowlist of what's actually served, and cloudflared answers 404 for any hostname
+without a route. (Cloudflare wildcards cover one label: `xmcp.example.com`, not
+`a.b.example.com`.) Per-tool alternative if you'd rather not wildcard:
+`cloudflared tunnel route dns <TUNNEL_ID> <tool>.example.com` for each tool — and
+remember it for every new tool, or its connector fails with "couldn't connect".
 
 ---
 
