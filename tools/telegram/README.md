@@ -12,8 +12,14 @@ guardrail exactly as for a native tool.
 
 - **Read-only by default** (`TELEGRAM_EXPOSED_TOOLS=read-only`, enforced as the
   child-env default in `server.py`): the engine's 49 `readOnlyHint` tools — read
-  chats/messages/contacts, search. No send, delete, join, or admin ops. Widening
-  to `all` is a deliberate `.env` change; pair it with `MCP_REQUIRE_APPROVAL=1`.
+  chats/messages/contacts, search. No send, delete, join, or admin ops.
+- **Writes behind the approval gate**: `TELEGRAM_EXPOSED_TOOLS=all` (in `.env`)
+  exposes the 67 write tools, and on the public posture every non-exempt call
+  blocks on the out-of-band Slack approval (`security/approval/`) until a human
+  clicks Approve. `approval-exempt.txt` — the engine's read-only names minus two
+  upstream mislabels (`get_invite_link`/`export_chat_invite` actually *create*
+  invite links) — keeps reads flowing without a tap per call. Regenerate that
+  file when bumping the engine pin (instructions in its header).
 - **Guardrail-screened output** (`untrusted_output=True`): message content from
   arbitrary chats is a prompt-injection vector, same class as xmcp's web content.
 - **Egress**: MTProto dials Telegram DC IPs directly, so this tool's squid
@@ -34,33 +40,5 @@ lives only in the gitignored `.env`.
 
 ## Tests
 
-`pytest tools/telegram` — no Telegram, no network: child-env overrides, schema
-strip, and proxy forwarding against a dummy stdio child.
-
-
-
-
-
-
-
-Now Part 2, the session string. I've already done the prep for you: cloned the generator to
-  ~/tg-session-gen (verified it's the exact same commit we pinned in the Dockerfile, b2f71f1) and
-  installed its dependencies. All that's left is the interactive login, which needs a real terminal
-  (it draws a QR code and prompts) — so run this in a separate terminal window, not through me:
-
-  cd ~/tg-session-gen
-  set -a; source ~/Documents/mcp-tools/tools/telegram/.env; set +a
-  uv run session_string_generator.py --qr
-
-  The middle line loads your TELEGRAM_API_ID/TELEGRAM_API_HASH straight from the .env you just
-  filled, so the generator won't ask for them.
-
-  What happens next:
-
-  1. It prints a QR code in the terminal. On your phone: Telegram → Settings → Devices → Link Desktop
-  Device → scan it. (QR expires after a bit; it redraws automatically, up to 10 times.)
-  2. If you have a 2FA cloud password set, it'll prompt for that.
-  3. When it asks for an account label, just press Enter (empty = the single-account default we
-  scoped).
-  4. It prints the session string — a long base64-looking blob. Copy the whole thing into
-  tools/telegram/.env as TELEGRAM_SESSION_STRING=<paste> (no quotes needed).
+`pytest tools/telegram` — no Telegram, no network: child-env overrides, approval
+exemptions, schema strip, and proxy forwarding against a dummy stdio child.

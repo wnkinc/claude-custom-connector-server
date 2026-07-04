@@ -47,6 +47,7 @@ services:
   telegram:
     environment:
       MCP_AUTH_ENABLED: "1"
+      MCP_REQUIRE_APPROVAL: "1"
       MCP_UNTRUSTED_OUTPUT: "1"
       MCP_PUBLIC_URL: https://telegram.${MCP_DOMAIN}
 
