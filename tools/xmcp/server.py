@@ -1,9 +1,16 @@
-"""MCP server: X (Twitter) read-only search/lookup, built directly on FastMCP.
+"""MCP server: X (Twitter) search/lookup, built directly on FastMCP.
 
 This is our own thin server on top of ``fastmcp`` (the OSS library) -- NOT a vendored
 copy of any app. It fetches X's OpenAPI spec, filters it down to a code-enforced
-read-only grant, and exposes the result as MCP tools via ``FastMCP.from_openapi``,
-plus a custom ``grok_x_search`` tool. Auth is app-only Bearer (no act-as-account).
+grant (read-only by default), and exposes the result as MCP tools via
+``FastMCP.from_openapi``, plus a custom ``grok_x_search`` tool. Auth is app-only
+Bearer (no act-as-account) -- which also means write operations, even when exposed
+via ``X_API_ALLOW_WRITES``, fail at X until user-context OAuth is wired in.
+
+Every tool carries MCP ``ToolAnnotations``: ``readOnlyHint`` splits the surface into
+the read-only vs write/delete permission categories Claude's connector UI shows
+(the same mechanism the telegram engine uses), and the annotation title names the
+backing API ("X API: ..." vs "xAI Grok: ...").
 
 The cross-cutting security layers (OAuth, out-of-band approval, guardrail screening)
 and the HTTP run are applied uniformly by ``security.serve.serve`` in :func:`main`.
@@ -17,6 +24,8 @@ from pathlib import Path
 
 import httpx
 from fastmcp import FastMCP
+from fastmcp.tools import Tool
+from mcp.types import ToolAnnotations
 
 # Make the repo root importable regardless of the process CWD (we run from the tool
 # dir), then pull in the shared serve() helper.
@@ -30,7 +39,9 @@ HTTP_METHODS = {"get", "post", "put", "patch", "delete", "options", "head", "tra
 # empty/missing `X_API_TOOL_ALLOWLIST` falls back to exactly these read ops (NOT
 # "expose everything"), so a misconfigured deploy fails closed to read-only instead
 # of silently exposing all 165 X operations (68 of them writes). `.env` may still
-# set `X_API_TOOL_ALLOWLIST` to NARROW or customize this.
+# set `X_API_TOOL_ALLOWLIST` to NARROW or customize this, or to the sentinel
+# `all` (ALLOWLIST_ALL) to deliberately expose the whole spec -- still subject to
+# the write-guard and the stream/webhook exclusion.
 DEFAULT_READ_ALLOWLIST = {
     "searchPostsRecent",
     "getPostsById",
@@ -41,6 +52,10 @@ DEFAULT_READ_ALLOWLIST = {
     "searchUsers",
     "getPostsCountsRecent",
 }
+
+# X_API_TOOL_ALLOWLIST sentinel: expose every operation the spec filter otherwise
+# permits. A deliberate one-word .env opt-out of the curated default above.
+ALLOWLIST_ALL = "all"
 
 LOGGER = logging.getLogger("xmcp.x_api")
 
@@ -154,8 +169,12 @@ def filter_openapi_spec(spec: dict) -> dict:
     new_paths = {}
     allow_tags = {tag.lower() for tag in parse_csv_env("X_API_TOOL_TAGS")}
     # Default-deny: an empty/missing allowlist falls back to the read-only default,
-    # never "expose everything". See DEFAULT_READ_ALLOWLIST.
-    allow_ops = parse_csv_env("X_API_TOOL_ALLOWLIST") or set(DEFAULT_READ_ALLOWLIST)
+    # never "expose everything". See DEFAULT_READ_ALLOWLIST. The explicit sentinel
+    # `all` disables the operationId filter (empty allow_ops = no filter below);
+    # the write-guard and stream/webhook exclusion still apply.
+    raw_allow = parse_csv_env("X_API_TOOL_ALLOWLIST")
+    expose_all = raw_allow == {ALLOWLIST_ALL}
+    allow_ops = set() if expose_all else (raw_allow or set(DEFAULT_READ_ALLOWLIST))
     deny_ops = parse_csv_env("X_API_TOOL_DENYLIST")
     # Write-guard: non-GET (mutate) operations are NEVER exposed unless writes are
     # explicitly opted in, regardless of what the allowlist contains. Makes "this is
@@ -196,15 +215,64 @@ def filter_openapi_spec(spec: dict) -> dict:
     n_tools = sum(
         1 for item in new_paths.values() for method in item if method.lower() in HTTP_METHODS
     )
-    used_default = not parse_csv_env("X_API_TOOL_ALLOWLIST")
+    if expose_all:
+        allowlist_mode = "ALL(spec)"
+    elif raw_allow:
+        allowlist_mode = "env"
+    else:
+        allowlist_mode = "DEFAULT(read-only)"
     LOGGER.warning(
         "X grant: %d tools exposed, writes=%s, allowlist=%s (%d write ops blocked)",
         n_tools,
         "ON" if allow_writes else "OFF",
-        "DEFAULT(read-only)" if used_default else "env",
+        allowlist_mode,
         n_write_blocked,
     )
     return filtered
+
+
+def collect_read_operation_ids(spec: dict) -> set[str]:
+    """The GET operationIds of a (filtered) spec: the tools safe to run unapproved."""
+    ops: set[str] = set()
+    for item in spec.get("paths", {}).values():
+        if not isinstance(item, dict):
+            continue
+        operation = item.get("get")
+        if isinstance(operation, dict) and isinstance(operation.get("operationId"), str):
+            ops.add(operation["operationId"])
+    return ops
+
+
+def apply_approval_exemptions(filtered_spec: dict) -> None:
+    """Default MCP_APPROVAL_EXEMPT to the read surface (env wins if set).
+
+    Same contract as the telegram tool's approval-exempt.txt, but DERIVED from the
+    filtered spec instead of maintained by hand: reads flow without out-of-band
+    approval, while any exposed write (X_API_ALLOW_WRITES=1) blocks on the gate.
+    """
+    exempt = collect_read_operation_ids(filtered_spec) | {"grok_x_search"}
+    os.environ.setdefault("MCP_APPROVAL_EXEMPT", ",".join(sorted(exempt)))
+
+
+def build_annotations(route) -> ToolAnnotations:  # type: ignore[no-untyped-def]
+    """MCP annotations for an OpenAPI-derived tool, from its HTTP method.
+
+    ``readOnlyHint`` is what Claude's connector UI groups the permission categories
+    by (read-only vs write/delete, each with its own always-allow/approve/block
+    policy) -- the same mechanism the telegram engine uses. The title prefix names
+    the backing API so the two surfaces sort apart in the tool list.
+    """
+    method = (route.method or "").upper()
+    title = f"X API: {route.summary or route.operation_id}"
+    if method == "GET":
+        return ToolAnnotations(title=title, readOnlyHint=True, openWorldHint=True)
+    return ToolAnnotations(
+        title=title,
+        readOnlyHint=False,
+        destructiveHint=method == "DELETE",
+        idempotentHint=method in {"PUT", "DELETE"},
+        openWorldHint=True,
+    )
 
 
 def print_tool_list(spec: dict) -> None:
@@ -290,6 +358,8 @@ def create_mcp() -> FastMCP:
 
     spec = load_openapi_spec()
     filtered_spec = filter_openapi_spec(spec)
+    # Must run before serve() builds the approval middleware (main calls us first).
+    apply_approval_exemptions(filtered_spec)
     comma_params = collect_comma_params(filtered_spec)
     print_tool_list(filtered_spec)
 
@@ -357,26 +427,38 @@ def create_mcp() -> FastMCP:
         },
     )
 
-    # x-mcp is guardrailed (main() calls serve(untrusted_output=True)): the guardrail nulls
-    # each result's structuredContent, so any tool advertising an outputSchema then fails
-    # the Claude connector's output validation (outputSchema with no structuredContent).
-    # serve() strips the LocalProvider tools (grok), but these from_openapi tools live in a
-    # dynamic OpenAPIProvider serve() can't reach -- so they must be stripped HERE, at build
-    # time, via mcp_component_fn. Same MCP_KEEP_OUTPUT_SCHEMA escape hatch as serve().
+    # mcp_component_fn customizes each from_openapi tool at build time (serve() can't
+    # reach their dynamic OpenAPIProvider):
+    # - outputSchema strip: x-mcp is guardrailed (main() calls serve(untrusted_output=
+    #   True)) and the guardrail nulls each result's structuredContent, so any tool
+    #   advertising an outputSchema then fails the Claude connector's output validation
+    #   (outputSchema with no structuredContent). Same MCP_KEEP_OUTPUT_SCHEMA escape
+    #   hatch as serve()'s LocalProvider pass (which handles grok).
+    # - annotations: read/write hints + API-source title (see build_annotations).
     keep_output_schema = is_truthy(os.getenv("MCP_KEEP_OUTPUT_SCHEMA", "0"))
 
-    def _strip_output_schema(_route, component) -> None:
-        if getattr(component, "output_schema", None) is not None:
+    def _customize_component(route, component) -> None:
+        if not keep_output_schema and getattr(component, "output_schema", None) is not None:
             component.output_schema = None
+        if hasattr(component, "annotations"):
+            component.annotations = build_annotations(route)
 
     mcp = FastMCP.from_openapi(
         openapi_spec=filtered_spec,
         client=client,
         name="X API MCP",
-        mcp_component_fn=None if keep_output_schema else _strip_output_schema,
+        mcp_component_fn=_customize_component,
     )
-    # The grok tool (add_tool -> LocalProvider) is stripped by serve()'s LocalProvider pass.
-    mcp.add_tool(grok_x_search)
+    # The grok tool (add_tool -> LocalProvider) is schema-stripped by serve()'s
+    # LocalProvider pass; its annotations are declared here.
+    mcp.add_tool(
+        Tool.from_function(
+            grok_x_search,
+            annotations=ToolAnnotations(
+                title="xAI Grok: X search", readOnlyHint=True, openWorldHint=True
+            ),
+        )
+    )
     return mcp
 
 
