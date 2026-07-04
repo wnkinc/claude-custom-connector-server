@@ -8,6 +8,7 @@ with the spec fetch faked -- which also pins the from_openapi outputSchema strip
 
 import asyncio
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ GRANT_ENV = [
     "X_API_ALLOW_WRITES",
     "X_BEARER_TOKEN",
     "MCP_KEEP_OUTPUT_SCHEMA",
+    "MCP_APPROVAL_EXEMPT",
 ]
 
 
@@ -78,6 +80,30 @@ def test_writes_blocked_even_when_allowlisted(monkeypatch):
 
     monkeypatch.setenv("X_API_ALLOW_WRITES", "1")  # explicit opt-in is the only door
     assert _exposed_ops(server.filter_openapi_spec(spec)) == {"createPost", "searchPostsRecent"}
+
+
+def test_allowlist_all_sentinel_exposes_every_read_but_writes_stay_guarded(monkeypatch):
+    monkeypatch.setenv("X_API_TOOL_ALLOWLIST", "all")
+    spec = _spec(
+        {
+            "/2/tweets/search/recent": {"get": _op("searchPostsRecent")},
+            "/2/anything/else": {"get": _op("someOtherReadOp")},
+            "/2/tweets": {"post": _op("createPost")},
+            "/2/tweets/search/stream": {"get": _op("searchStream")},
+        }
+    )
+    # `all` lifts the operationId filter, NOT the write-guard or stream exclusion.
+    assert _exposed_ops(server.filter_openapi_spec(spec)) == {
+        "searchPostsRecent",
+        "someOtherReadOp",
+    }
+
+    monkeypatch.setenv("X_API_ALLOW_WRITES", "1")
+    assert _exposed_ops(server.filter_openapi_spec(spec)) == {
+        "searchPostsRecent",
+        "someOtherReadOp",
+        "createPost",
+    }
 
 
 def test_denylist_beats_allowlist(monkeypatch):
@@ -199,3 +225,62 @@ def test_keep_output_schema_escape_hatch(monkeypatch):
     monkeypatch.setenv("MCP_KEEP_OUTPUT_SCHEMA", "1")
     tools = _tools(server.create_mcp())
     assert tools["searchPostsRecent"].output_schema is not None
+
+
+# --- annotations: Claude's read-only vs write permission categories ----------------
+
+
+def _fake_mixed_spec_fetch(monkeypatch):
+    spec = _spec(
+        {
+            "/2/tweets/search/recent": {
+                "get": {**_op("searchPostsRecent"), "responses": SEARCH_RESPONSES}
+            },
+            "/2/tweets": {"post": {**_op("createPost"), "responses": SEARCH_RESPONSES}},
+            "/2/tweets/{id}": {"delete": {**_op("deleteTweetById"), "responses": SEARCH_RESPONSES}},
+        }
+    )
+    monkeypatch.setattr(server, "load_openapi_spec", lambda: spec)
+
+
+def test_annotations_split_reads_from_writes(monkeypatch):
+    _fake_mixed_spec_fetch(monkeypatch)
+    monkeypatch.setenv("X_BEARER_TOKEN", "token")
+    monkeypatch.setenv("X_API_TOOL_ALLOWLIST", "all")
+    monkeypatch.setenv("X_API_ALLOW_WRITES", "1")
+    tools = _tools(server.create_mcp())
+
+    read = tools["searchPostsRecent"].annotations
+    assert read.readOnlyHint is True
+    assert read.title.startswith("X API: ")
+
+    post = tools["createPost"].annotations
+    assert post.readOnlyHint is False
+    assert post.destructiveHint is False
+
+    delete = tools["deleteTweetById"].annotations
+    assert delete.readOnlyHint is False
+    assert delete.destructiveHint is True
+
+    grok = tools["grok_x_search"].annotations
+    assert grok.readOnlyHint is True
+    assert grok.title.startswith("xAI Grok: ")
+
+
+def test_approval_exemptions_default_to_the_read_surface(monkeypatch):
+    _fake_mixed_spec_fetch(monkeypatch)
+    monkeypatch.setenv("X_BEARER_TOKEN", "token")
+    monkeypatch.setenv("X_API_TOOL_ALLOWLIST", "all")
+    monkeypatch.setenv("X_API_ALLOW_WRITES", "1")
+    server.create_mcp()
+    exempt = set(os.environ["MCP_APPROVAL_EXEMPT"].split(","))
+    # Reads + grok flow unapproved; the exposed writes must NOT be exempt.
+    assert exempt == {"searchPostsRecent", "grok_x_search"}
+
+
+def test_approval_exemptions_env_wins(monkeypatch):
+    _fake_mixed_spec_fetch(monkeypatch)
+    monkeypatch.setenv("X_BEARER_TOKEN", "token")
+    monkeypatch.setenv("MCP_APPROVAL_EXEMPT", "handPicked")
+    server.create_mcp()
+    assert os.environ["MCP_APPROVAL_EXEMPT"] == "handPicked"
