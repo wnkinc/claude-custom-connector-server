@@ -166,6 +166,15 @@ Finish wiring it (all in-repo):
            environment:
              MCP_AUTH_ENABLED: "1"
              MCP_PUBLIC_URL: https://${NAME}.\${MCP_DOMAIN}
+     DNS: already covered if you created the wildcard record (docs/SETUP.md).
+     Per-tool records instead? Don't skip this or the connector can't resolve:
+         cloudflared tunnel route dns <TUNNEL_ID> ${SUBDOMAIN}
+     Route changes apply on cloudflared RECREATE (config renders at up), and a
+     changed squid.compose.conf needs an egress RESTART (single-file bind mounts
+     go stale on git pull):
+         docker compose -f docker-compose.yml -f docker-compose.tunnel.yml \\
+           up -d --force-recreate cloudflared
+         docker compose restart egress
   5. Secrets: cp tools/${NAME}/env.example tools/${NAME}/.env  (fill Google creds; set
      MCP_AUTH_ENABLED=1 for public), and add https://${SUBDOMAIN}/auth/callback to the
      shared Google OAuth client's Authorized redirect URIs.

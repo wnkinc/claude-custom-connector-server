@@ -83,7 +83,11 @@ inserts the compose service (opt-in `profiles:` entry + state volume) into
    hosts this tool must reach in its allowlist file.
 4. **Ingress** — a hostname route in the cloudflared `configs:` block of
    `docker-compose.tunnel.yml`, plus the service entry flipping its public posture
-   (`MCP_AUTH_ENABLED=1`, `MCP_PUBLIC_URL`).
+   (`MCP_AUTH_ENABLED=1`, `MCP_PUBLIC_URL`). DNS is already covered by the one-time
+   wildcard record (see SETUP.md); with per-tool records, this is also the moment to
+   run `cloudflared tunnel route dns`. On a live stack, routes apply when cloudflared
+   is *recreated* (its config renders at `up`), and squid config changes need an
+   egress *restart* (single-file bind mounts keep the pre-pull inode).
 5. **Secrets & identity** — `cp env.example .env` and fill it; add the tool's
    `/auth/callback` URL to the shared Google OAuth client's authorized redirect URIs.
 6. **Enable** — add the tool to `COMPOSE_PROFILES` (root `.env` + `env.example`'s
