@@ -15,9 +15,11 @@ Tools exposed:
   crypto-ingest — fetch crypto OHLCV bars (Tiingo) and merge them into the lake
   data-catalog  — list what's stored (the inventory: what symbols/intervals exist)
   data-read     — read stored bars for one symbol/interval back out of the lake
+  data-chart    — render stored bars as an in-chat candlestick widget (MCP Apps)
   lean-export   — write stored crypto bars into the Lean engine's data folder
 """
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -224,6 +226,106 @@ def data_read(
         f"Stored at {path}\n\n"
         f"{view.to_string()}"
     )
+
+
+# ---- in-chat chart widget (MCP Apps) ---------------------------------------
+# data-chart is the widgeted twin of data-read: its _meta.ui.resourceUri points the
+# host at the ui:// resource below, which it renders in a sandboxed iframe and feeds
+# the tool's JSON result. Hosts without the apps surface ignore _meta.ui and show
+# the JSON — degradation is automatic, so the widget needs no enable flag.
+
+WIDGET_URI = "ui://widgets/chart.html"
+_widget_html_cache: str | None = None
+
+
+def _widget_html() -> str:
+    """chart.html with the vendored ext-apps bundle inlined.
+
+    The iframe's CSP blocks all external fetches, so the widget runtime
+    (@modelcontextprotocol/ext-apps, vendored in widgets/) MUST travel inside the
+    HTML itself — a CDN <script> renders a blank widget.
+    """
+    global _widget_html_cache
+    if _widget_html_cache is None:
+        widgets = Path(__file__).resolve().parent / "widgets"
+        _widget_html_cache = (
+            (widgets / "chart.html")
+            .read_text()
+            .replace("/*__EXT_APPS_BUNDLE__*/", (widgets / "ext-apps-bundle.js").read_text())
+        )
+    return _widget_html_cache
+
+
+@mcp.resource(WIDGET_URI, name="Candlestick chart widget", mime_type="text/html;profile=mcp-app")
+def chart_widget() -> str:
+    return _widget_html()
+
+
+# The host resolves the widget from the FLAT "ui/resourceUri" key (the ext-apps
+# SDK's RESOURCE_URI_META_KEY); the nested ui.resourceUri form alone renders
+# nothing. The SDK's registerAppTool emits both, so we mirror it exactly.
+@mcp.tool(
+    name="data-chart",
+    annotations=ToolAnnotations(title="Chart stored bars", readOnlyHint=True, openWorldHint=False),
+    meta={"ui": {"resourceUri": WIDGET_URI}, "ui/resourceUri": WIDGET_URI},
+)
+def data_chart(
+    asset: str,
+    symbol: str,
+    interval: str = "1d",
+    source: str = "tiingo",
+    bars: int = 250,
+) -> str:
+    """
+    Show a stored series as an interactive candlestick chart in the chat. Read-only.
+
+    Renders the last ``bars`` bars (default 250, max 1000) of the stored
+    ``asset``/``source``/``symbol``/``interval`` series as an inline price+volume
+    candlestick widget (hover for per-bar OHLCV, table view included) — same series
+    addressing as data-read, which stays the plain-text way to inspect rows. The
+    result is also the charted bars as JSON, so the numbers remain readable directly.
+    Prefer this when the user wants to SEE a series; use data-catalog to discover
+    what's stored.
+    """
+    asset = (asset or "").strip().lower()
+    symbol = (symbol or "").strip().upper()
+    source = (source or "tiingo").strip().lower()
+
+    df = lake.read(asset, source, symbol, interval)
+    if df is None or df.empty:  # miss -> same self-correcting hint as data-read, as JSON
+        have = [e["key"] for e in lake.catalog() if symbol in e["key"].split("/")]
+        hint = (
+            f" Stored for {symbol}: {', '.join(have)} — retry with a matching source+interval."
+            if have
+            else " Nothing stored for this symbol — ingest it first, or check data-catalog."
+        )
+        return json.dumps(
+            {"error": f"No {asset or '?'}/{source}/{symbol}/{interval} stored.{hint}"}
+        )
+
+    view = df.tail(min(1000, max(2, int(bars))))
+    cols = {c.lower(): c for c in view.columns}
+    rows = []
+    for ts, r in view.iterrows():
+        stamp = ts.strftime("%Y-%m-%d %H:%M").removesuffix(" 00:00")
+        ohlc = [round(float(r[cols[c]]), 8) for c in ("open", "high", "low", "close")]
+        vol = round(float(r[cols["volume"]]), 3) if "volume" in cols else 0
+        rows.append([stamp, *ohlc, vol])
+    payload = {
+        "summary": (
+            f"Charted the last {len(view)} of {len(df)} stored {interval} {asset} bars "
+            f"for {symbol} ({source})."
+        ),
+        "symbol": symbol,
+        "asset": asset,
+        "interval": interval,
+        "source": source,
+        "stored_rows": len(df),
+        "start": rows[0][0],
+        "end": rows[-1][0],
+        "bars": rows,
+    }
+    return json.dumps(payload, separators=(",", ":"))
 
 
 @mcp.tool(
