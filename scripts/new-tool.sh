@@ -166,7 +166,7 @@ Finish wiring it (all in-repo):
            environment:
              MCP_AUTH_ENABLED: "1"
              MCP_PUBLIC_URL: https://${NAME}.\${MCP_DOMAIN}
-     DNS: already covered if you created the wildcard record (docs/SETUP.md).
+     DNS: already covered if you created the wildcard record (docs/deploy/local.md).
      Per-tool records instead? Don't skip this or the connector can't resolve:
          cloudflared tunnel route dns <TUNNEL_ID> ${SUBDOMAIN}
      Route changes apply on cloudflared RECREATE (config renders at up), and a

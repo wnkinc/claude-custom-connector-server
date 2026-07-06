@@ -40,9 +40,22 @@ The same image runs locally (`docker compose up`) and in the cloud — transport
 
 - **Tools are opt-in (compose profiles).** Every tool service carries a profile named
   after itself; `COMPOSE_PROFILES` in the root `.env` picks which ones a deployment
-  builds and runs. The egress wall and guardrail carry no profile — they're the shared
+  builds and runs. The guardrail rides the same mechanism (profile `guardrail`, on by
+  default). The egress wall and approval sidecar carry no profile — they're the shared
   substrate and always run. This is what keeps 3 tools or 100 tools the same repo: a
   deployer never pulls the image of a tool they didn't ask for.
+
+- **The guardrail is a provider switch, matched to the deployment path.** The sidecar's
+  `/scan` contract is fixed; `GUARDRAIL_PROVIDER` picks the engine behind it —
+  `llamafirewall` (local model; the local default) or `bedrock` (Amazon Bedrock
+  Guardrails ApplyGuardrail; the AWS default, provisioned by `deploy/aws`). Both leave
+  through the guardrail's own egress-wall listener, and the tool middleware fails
+  closed either way.
+
+- **Deployment is a chooser, one stack.** `docs/DEPLOY.md` routes to two runbooks —
+  your own box (`docs/deploy/local.md`) or an EC2 VM provisioned end-to-end by the
+  Pulumi program in `deploy/aws/` (`docs/deploy/aws.md`). Both run these same compose
+  files behind a Cloudflare Tunnel, so a deployment can move between paths later.
 
 - **Tools never call each other; cooperation is an artifact plane.** When two tools need
   to cooperate (data produces the lake, lean backtests it), they share a named volume
@@ -93,7 +106,7 @@ inserts the compose service (opt-in `profiles:` entry + state volume) into
 4. **Ingress** — a hostname route in the cloudflared `configs:` block of
    `docker-compose.tunnel.yml`, plus the service entry flipping its public posture
    (`MCP_AUTH_ENABLED=1`, `MCP_PUBLIC_URL`). DNS is already covered by the one-time
-   wildcard record (see SETUP.md); with per-tool records, this is also the moment to
+   wildcard record (see docs/deploy/local.md); with per-tool records, this is also the moment to
    run `cloudflared tunnel route dns`. On a live stack, routes apply when cloudflared
    is *recreated* (its config renders at `up`), and squid config changes need an
    egress *restart* (single-file bind mounts keep the pre-pull inode).

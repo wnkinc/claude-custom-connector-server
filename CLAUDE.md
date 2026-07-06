@@ -11,12 +11,13 @@ security/                  # shared plumbing, imported by every tool
   approval/                #   out-of-band human-in-the-loop approval gate
   egress-proxy/            #   squid egress allowlist (per-tool domains, default-deny)
   ingress/                 #   tunnel creds staging (gitignored; routing lives in the overlay)
-  guardrail/service/       #   standalone LlamaFirewall output-screen service (own sidecar)
+  guardrail/service/       #   output-screen sidecar; GUARDRAIL_PROVIDER=llamafirewall|bedrock
   eval/                    #   garak red-team harness
 tools/                     # one tool per dir: server.py + Dockerfile + requirements.lock
   xmcp/                    #   X read-only search/lookup + Grok x_search (:8061)
   data/                    #   market data via OpenBB -> parquet lake (:8062)
   lean/                    #   QuantConnect Lean backtests of agent-authored algorithms (:8064)
+deploy/aws/                # the cloud path as code: pulumi up -> EC2 VM running this stack
 scripts/new-tool.sh        # stamp a new tool
-docs/                      # SETUP.md, ARCHITECTURE.md (how it fits together)
+docs/                      # DEPLOY.md chooser -> deploy/{local,aws}.md runbooks; ARCHITECTURE.md
 ```
