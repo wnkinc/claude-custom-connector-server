@@ -10,8 +10,12 @@ repos:
       - id: check-json
       - id: check-added-large-files
       - id: detect-private-key # belt-and-suspenders next to gitleaks
+      # Vendored bundles stay byte-exact (provenance-documented; whitespace can be
+      # significant inside their minified template literals).
       - id: end-of-file-fixer
+        exclude: ^tools/data/widgets/ext-apps-bundle\.js$
       - id: trailing-whitespace
+        exclude: ^tools/data/widgets/ext-apps-bundle\.js$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.20

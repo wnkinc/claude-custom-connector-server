@@ -18,6 +18,7 @@ that used to live here were removed with the lean refit (recover from git histor
 | `crypto-ingest` | fetch crypto OHLCV bars (Tiingo) → merge into the lake |
 | `data-catalog` | list what's stored — the lake inventory (read-only) |
 | `data-read` | read one stored series back out of the lake (read-only) |
+| `data-chart` | render one stored series as an in-chat candlestick widget (read-only) |
 | `lean-export` | write a stored series into the Lean data folder (the bridge) |
 
 The agent's pipeline: `crypto-ingest` → `lean-export` → backtest (lean tool). What the

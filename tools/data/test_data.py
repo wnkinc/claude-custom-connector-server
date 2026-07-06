@@ -6,6 +6,7 @@ the provider. ``lean_export`` is asserted against golden lines taken verbatim fr
 data bundled in the quantconnect/lean engine image — the format is Lean's contract.
 """
 
+import json
 import zipfile
 from types import SimpleNamespace
 
@@ -165,6 +166,31 @@ def test_data_read_hit_returns_rows(tmp_path, monkeypatch):
     )
     out = server.data_read("crypto", "BTCUSD", "1m", "tiingo", tail=1)
     assert "1m crypto bars for BTCUSD (tiingo)" in out
+
+
+def test_data_chart_hit_returns_json_with_capped_bars(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import server
+
+    lake.ingest(
+        ("crypto", "tiingo", "BTCUSD", "1d"),
+        _frame(["2024-01-02", "2024-01-03", "2024-01-04"], [1.0, 2.0, 3.0]),
+    )
+    out = json.loads(server.data_chart("crypto", "BTCUSD", bars=2))
+    assert out["symbol"] == "BTCUSD" and out["stored_rows"] == 3
+    # last `bars` of the stored series, each row [ts, o, h, l, c, v]
+    assert [row[4] for row in out["bars"]] == [2.0, 3.0]
+
+
+def test_data_chart_miss_is_json_error_with_hint(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import server
+
+    lake.ingest(("crypto", "tiingo", "BTCUSD", "1m"), _frame(["2024-01-02"], [1.0]))
+    # deliberately JSON (not data-read's plain text): the widget renders the miss too
+    out = json.loads(server.data_chart("crypto", "BTCUSD"))
+    assert "No crypto/tiingo/BTCUSD/1d" in out["error"]
+    assert "crypto/tiingo/BTCUSD/1m" in out["error"]
 
 
 # ── feeds: OpenBB endpoint wrapper (fake obb, no network) ────────────────────

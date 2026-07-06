@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  /* Palette roles (dataviz reference palette). Light is the base; the dark block
+     swaps the same roles. The host drives theme via a .dark/.light class on <html>
+     (hostContext); the media query only covers the moment before connect(). */
+  .viz-root {
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --up: #0ca30c;         /* status good  — validated ≥3:1 both surfaces */
+    --down: #d03b3b;       /* status critical */
+    --up-text: #006300;    /* delta text needs more contrast than a mark */
+    --down-text: #d03b3b;
+    --vol: #9ec5f4;        /* sequential blue 200 — recessive secondary panel */
+    --tip-bg: #ffffff;
+    --border: rgba(11, 11, 11, 0.1);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) { .viz-root { --surface:#1a1a19; --ink:#ffffff; --ink-2:#c3c2b7; --grid:#2c2c2a; --axis:#383835; --up-text:#0ca30c; --vol:#184f95; --tip-bg:#232322; --border:rgba(255,255,255,0.1); color-scheme: dark; } }
+  :root.light .viz-root { --surface:#fcfcfb; --ink:#0b0b0b; --ink-2:#52514e; --grid:#e1e0d9; --axis:#c3c2b7; --up-text:#006300; --vol:#9ec5f4; --tip-bg:#ffffff; --border:rgba(11,11,11,0.1); color-scheme: light; }
+  :root.dark  .viz-root { --surface:#1a1a19; --ink:#ffffff; --ink-2:#c3c2b7; --grid:#2c2c2a; --axis:#383835; --up-text:#0ca30c; --vol:#184f95; --tip-bg:#232322; --border:rgba(255,255,255,0.1); color-scheme: dark; }
+
+  html, body { margin: 0; }
+  .viz-root {
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--surface);
+    color: var(--ink);
+    padding: 12px 12px 8px;
+  }
+  header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 2px 6px; }
+  #sym { font-size: 15px; font-weight: 650; }
+  #sub, #span { color: var(--muted); font-size: 12px; }
+  #last { margin-left: auto; display: flex; align-items: baseline; gap: 8px; }
+  #close { font-weight: 650; font-size: 15px; }
+  #delta { font-size: 12px; font-weight: 600; }
+  #delta.up { color: var(--up-text); }
+  #delta.down { color: var(--down-text); }
+  #view-toggle {
+    font: inherit; font-size: 12px; color: var(--ink-2);
+    background: none; border: 1px solid var(--border); border-radius: 6px;
+    padding: 2px 10px; cursor: pointer;
+  }
+  #view-toggle:hover { color: var(--ink); }
+
+  #chart-wrap { position: relative; }
+  svg { display: block; width: 100%; }
+  text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+  #tip {
+    position: absolute; pointer-events: none; z-index: 2;
+    background: var(--tip-bg); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+    padding: 7px 10px; min-width: 132px;
+  }
+  #tip .d { color: var(--ink-2); font-size: 11px; margin-bottom: 3px; }
+  #tip .r { display: flex; justify-content: space-between; gap: 14px; }
+  #tip .r b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  #tip .r span { color: var(--ink-2); }
+  #tip .chg.up b { color: var(--up-text); }
+  #tip .chg.down b { color: var(--down-text); }
+
+  #table-wrap { max-height: 320px; overflow-y: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { text-align: right; padding: 4px 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--surface); }
+  td { border-top: 1px solid var(--grid); }
+
+  #msg { color: var(--ink-2); padding: 24px 8px; text-align: center; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<script>
+  // Error boundary: a failed module script otherwise renders as a silent blank
+  // widget (the #1 MCP-apps failure mode). Paint the reason where the user looks.
+  ["error", "unhandledrejection"].forEach((kind) =>
+    addEventListener(kind, (e) => {
+      const m = document.getElementById("msg");
+      if (!m) return;
+      m.hidden = false;
+      m.textContent = "Widget failed: " + (e.reason?.message ?? e.reason ?? e.message ?? kind);
+    })
+  );
+</script>
+<div class="viz-root">
+  <header>
+    <span id="sym"></span><span id="sub"></span><span id="span"></span>
+    <div id="last"><span id="close"></span><span id="delta"></span></div>
+    <button id="view-toggle" type="button" hidden>Table</button>
+  </header>
+  <div id="chart-wrap" hidden><svg id="chart" role="img" aria-label="Candlestick chart"></svg><div id="tip" hidden></div></div>
+  <div id="table-wrap" hidden></div>
+  <div id="msg">Waiting for data…</div>
+</div>
+<script type="module">
+/* The bundle gets its OWN module scope: its minified top-level identifiers (el,
+   y, Q, …) collide with page code if inlined into the same script — a parse-time
+   SyntaxError that renders as a silent blank widget. globalThis.ExtApps bridges
+   the two scopes; inline module scripts execute in document order. */
+/*__EXT_APPS_BUNDLE__*/
+</script>
+<script type="module">
+const { App } = globalThis.ExtApps;
+
+const SVGNS = "http://www.w3.org/2000/svg";
+const $ = (id) => document.getElementById(id);
+let payload = null;   // last good payload — re-rendered on resize/theme
+let showTable = false;
+
+/* ---------- formatting ---------- */
+// Adaptive decimals: BTC needs none, sub-dollar alts need several.
+const priceFmt = (v) =>
+  v >= 1000 ? v.toLocaleString("en-US", { maximumFractionDigits: 0 })
+  : v >= 10 ? v.toFixed(2)
+  : v >= 0.1 ? v.toFixed(4)
+  : v.toPrecision(4);
+const volFmt = (v) =>
+  v >= 1e9 ? (v / 1e9).toFixed(1) + "B"
+  : v >= 1e6 ? (v / 1e6).toFixed(1) + "M"
+  : v >= 1e3 ? (v / 1e3).toFixed(1) + "K"
+  : String(Math.round(v));
+
+/* ---------- header ---------- */
+function renderHeader(p) {
+  $("sym").textContent = p.symbol;
+  $("sub").textContent = `${p.interval} · ${p.source}`;
+  $("span").textContent = `${p.start} → ${p.end}`;
+  const last = p.bars[p.bars.length - 1];
+  const prev = p.bars.length > 1 ? p.bars[p.bars.length - 2] : null;
+  $("close").textContent = priceFmt(last[4]);
+  const d = $("delta");
+  if (prev && prev[4] > 0) {
+    const chg = (last[4] - prev[4]) / prev[4] * 100;
+    d.textContent = `${chg >= 0 ? "▲" : "▼"} ${Math.abs(chg).toFixed(2)}%`;
+    d.className = chg >= 0 ? "up" : "down";
+  } else { d.textContent = ""; }
+}
+
+/* ---------- chart ---------- */
+// "Nice" round tick values spanning [lo, hi].
+function ticks(lo, hi, n) {
+  const raw = (hi - lo) / n, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => (hi - lo) / s <= n) || raw;
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) out.push(v);
+  return out;
+}
+const el = (tag, attrs) => {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  return e;
+};
+
+function renderChart(p) {
+  const svg = $("chart");
+  svg.textContent = "";
+  const bars = p.bars;
+  const W = Math.max(280, $("chart-wrap").clientWidth);
+  const H = 300, padT = 8, padB = 18, padL = 4, padR = 58;
+  const volH = 52, gapPanels = 8;
+  const priceB = H - padB - volH - gapPanels;   // bottom y of the price panel
+  const plotW = W - padL - padR;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("height", H);
+
+  let lo = Infinity, hi = -Infinity, maxV = 0;
+  for (const [, o, h, l, c, v] of bars) {
+    if (l < lo) lo = l;
+    if (h > hi) hi = h;
+    if (v > maxV) maxV = v;
+  }
+  if (hi === lo) { hi += 1; lo -= 1; }
+  const y = (v) => priceB - (v - lo) / (hi - lo) * (priceB - padT);
+  const vy = (v) => H - padB - (maxV ? v / maxV * volH : 0);
+  const slot = plotW / bars.length;
+  const bw = Math.max(1, Math.min(9, slot - Math.max(1, slot * 0.25)));
+  const x = (i) => padL + slot * (i + 0.5);
+
+  // Recessive grid + right-edge price labels.
+  for (const t of ticks(lo, hi, 4)) {
+    const gy = y(t);
+    svg.append(el("line", { x1: padL, x2: W - padR + 4, y1: gy, y2: gy, stroke: "var(--grid)", "stroke-width": 1 }));
+    const lbl = el("text", { x: W - padR + 8, y: gy + 4 });
+    lbl.textContent = priceFmt(t);
+    svg.append(lbl);
+  }
+  // A few time labels along the bottom.
+  const nT = Math.max(2, Math.min(6, Math.floor(plotW / 90)));
+  for (let k = 0; k < nT; k++) {
+    const i = Math.round(k * (bars.length - 1) / (nT - 1));
+    const lbl = el("text", { x: x(i), y: H - 4, "text-anchor": k === 0 ? "start" : k === nT - 1 ? "end" : "middle" });
+    lbl.textContent = bars[i][0].slice(0, 10);
+    svg.append(lbl);
+  }
+
+  // Volume panel (recessive single hue), then candles. Up = hollow, down = filled,
+  // so the sign is never carried by color alone (CVD).
+  for (let i = 0; i < bars.length; i++) {
+    const [, , , , , v] = bars[i];
+    svg.append(el("rect", {
+      x: x(i) - bw / 2, y: vy(v), width: bw, height: Math.max(0, H - padB - vy(v)),
+      fill: "var(--vol)",
+    }));
+  }
+  for (let i = 0; i < bars.length; i++) {
+    const [, o, h, l, c] = bars[i];
+    const up = c >= o;
+    const color = up ? "var(--up)" : "var(--down)";
+    svg.append(el("line", { x1: x(i), x2: x(i), y1: y(h), y2: y(l), stroke: color, "stroke-width": 1 }));
+    const top = y(Math.max(o, c)), hgt = Math.max(1, Math.abs(y(o) - y(c)));
+    svg.append(el("rect", {
+      x: x(i) - bw / 2, y: top, width: bw, height: hgt,
+      fill: up ? "var(--surface)" : color, stroke: color, "stroke-width": 1,
+    }));
+  }
+
+  // Hover layer: crosshair snaps to the nearest bar; one tooltip carries the values.
+  const cross = el("line", { y1: padT, y2: H - padB, stroke: "var(--axis)", "stroke-width": 1, visibility: "hidden" });
+  svg.append(cross);
+  const hit = el("rect", { x: padL, y: 0, width: plotW, height: H, fill: "transparent" });
+  svg.append(hit);
+  const tip = $("tip");
+  const move = (ev) => {
+    const r = svg.getBoundingClientRect();
+    const px = (ev.clientX - r.left) * (W / r.width);
+    const i = Math.max(0, Math.min(bars.length - 1, Math.floor((px - padL) / slot)));
+    cross.setAttribute("x1", x(i));
+    cross.setAttribute("x2", x(i));
+    cross.setAttribute("visibility", "visible");
+    renderTip(bars, i);
+    tip.hidden = false;
+    const left = x(i) / W * r.width;
+    tip.style.left = Math.min(Math.max(4, left + 12), r.width - tip.offsetWidth - 4) + "px";
+    tip.style.top = "6px";
+  };
+  hit.addEventListener("pointermove", move);
+  hit.addEventListener("pointerleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); });
+}
+
+function renderTip(bars, i) {
+  const [ts, o, h, l, c, v] = bars[i];
+  const prev = i > 0 ? bars[i - 1][4] : null;
+  const tip = $("tip");
+  tip.textContent = "";
+  const d = document.createElement("div");
+  d.className = "d";
+  d.textContent = ts;
+  tip.append(d);
+  const rows = [["O", priceFmt(o)], ["H", priceFmt(h)], ["L", priceFmt(l)], ["C", priceFmt(c)], ["Vol", volFmt(v)]];
+  if (prev) {
+    const chg = (c - prev) / prev * 100;
+    rows.push(["Δ", `${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%`, chg >= 0 ? "chg up" : "chg down"]);
+  }
+  for (const [k, val, cls] of rows) {
+    const r = document.createElement("div");
+    r.className = "r" + (cls ? " " + cls : "");
+    const kk = document.createElement("span");
+    kk.textContent = k;
+    const vv = document.createElement("b");
+    vv.textContent = val;
+    r.append(kk, vv);
+    tip.append(r);
+  }
+}
+
+/* ---------- table view (the no-hover / accessibility path) ---------- */
+function renderTable(p) {
+  const wrap = $("table-wrap");
+  wrap.textContent = "";
+  const table = document.createElement("table");
+  const head = table.createTHead().insertRow();
+  for (const h of ["Time", "Open", "High", "Low", "Close", "Volume"]) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    head.append(th);
+  }
+  const body = table.createTBody();
+  for (let i = p.bars.length - 1; i >= 0; i--) {
+    const [ts, o, h, l, c, v] = p.bars[i];
+    const row = body.insertRow();
+    for (const cell of [ts, priceFmt(o), priceFmt(h), priceFmt(l), priceFmt(c), volFmt(v)]) {
+      row.insertCell().textContent = cell;
+    }
+  }
+  wrap.append(table);
+}
+
+/* ---------- state ---------- */
+function render() {
+  if (!payload) return;
+  if (payload.error) {
+    $("msg").textContent = payload.error;
+    $("msg").hidden = false;
+    $("chart-wrap").hidden = true;
+    $("table-wrap").hidden = true;
+    $("view-toggle").hidden = true;
+    return;
+  }
+  renderHeader(payload);
+  $("msg").hidden = true;
+  $("view-toggle").hidden = false;
+  $("view-toggle").textContent = showTable ? "Chart" : "Table";
+  $("chart-wrap").hidden = showTable;
+  $("table-wrap").hidden = !showTable;
+  if (showTable) renderTable(payload);
+  else renderChart(payload);
+}
+$("view-toggle").addEventListener("click", () => { showTable = !showTable; render(); });
+
+function applyTheme(theme) {
+  if (!theme) return;
+  document.documentElement.classList.toggle("dark", theme === "dark");
+  document.documentElement.classList.toggle("light", theme !== "dark");
+}
+
+/* ---------- host wiring ---------- */
+const app = new App({ name: "data-chart", version: "1.0.0" }, {}, { autoResize: true });
+app.ontoolresult = ({ content }) => {
+  try {
+    payload = JSON.parse(content[0].text);
+  } catch {
+    payload = { error: "Could not parse the tool result payload." };
+  }
+  render();
+};
+app.onhostcontextchanged = (ctx) => { applyTheme(ctx?.theme); render(); };
+await app.connect();
+applyTheme(app.getHostContext()?.theme);
+new ResizeObserver(() => { if (payload && !showTable) render(); }).observe(document.body);
+</script>
+</body>
+</html>
