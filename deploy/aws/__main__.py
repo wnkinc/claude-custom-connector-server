@@ -1,11 +1,16 @@
 """mcp-tools on AWS: the same docker-compose stack as a local deploy, on one EC2 VM.
 
+Ingress (the Cloudflare Tunnel + wildcard DNS) is the shared deploy/cloudflare
+stack — `pulumi up` there first, then point `cloudflareStack` here at it. This
+program consumes its `tunnelId`/`credsJson` outputs, so switching a deployment
+between local and AWS keeps the same domain, tunnel, and credentials.
+
 What this program owns (and `pulumi destroy` removes):
-  - a Cloudflare Tunnel + one wildcard DNS record (ingress; the VM dials out, so
-    the security group has zero inbound rules — admin access is SSM Session Manager)
   - an EC2 instance (default: t3.large, 60 GB gp3) that boots docker, clones the
     repo at a pinned ref, renders the root .env, and brings up
-    docker-compose.yml + docker-compose.tunnel.yml
+    docker-compose.yml + docker-compose.tunnel.yml — behind a security group
+    with zero inbound rules (tunnel + SSM agent dial out; admin access is SSM
+    Session Manager)
   - the guardrail's cloud provider: an Amazon Bedrock Guardrail (prompt-attack
     filter only) + an instance role scoped to ApplyGuardrail on it
   - SSM SecureString parameters carrying the two boot secrets (tunnel credentials,
@@ -16,8 +21,9 @@ What stays manual (see docs/deploy/aws.md): the Google OAuth client, per-tool
 
 Config (pulumi config set <key> <value>):
   domain               (required)  parent domain, on Cloudflare
-  cloudflareAccountId  (required)
-  cloudflareZoneId     (required)  zone of <domain>
+  cloudflareStack      (required)  StackReference to deploy/cloudflare, e.g.
+                                   organization/mcp-tools-cloudflare/prod
+                                   (same backend as this stack)
   tools                default "xmcp,data" — comma list of tool profiles
   guardrail            default "bedrock" — bedrock | llamafirewall | off
   hfToken              secret; llamafirewall mode only
@@ -26,25 +32,20 @@ Config (pulumi config set <key> <value>):
   instanceType         default "t3.large"
   volumeGb             default 60 (lean's 13 GB base image wants more)
   aws:region           the deploy region (bedrock guardrail lives here too)
-Cloudflare API token: CLOUDFLARE_API_TOKEN env or `pulumi config set cloudflare:apiToken --secret`.
 """
 
 from __future__ import annotations
 
-import base64
 import json
 
 import pulumi
 import pulumi_aws as aws
-import pulumi_cloudflare as cloudflare
-import pulumi_random as random_
 
 UPSTREAM_REPO = "https://github.com/wnkinc/claude-custom-connector-server.git"
 
 cfg = pulumi.Config()
 domain = cfg.require("domain")
-cf_account_id = cfg.require("cloudflareAccountId")
-cf_zone_id = cfg.require("cloudflareZoneId")
+cloudflare_stack = cfg.require("cloudflareStack")
 tools = [t.strip() for t in (cfg.get("tools") or "xmcp,data").split(",") if t.strip()]
 guardrail_mode = cfg.get("guardrail") or "bedrock"
 repo_url = cfg.get("repoUrl") or UPSTREAM_REPO
@@ -60,40 +61,18 @@ region = aws.get_region().name
 stack = pulumi.get_stack()
 prefix = f"mcp-tools-{stack}"
 
-# --- ingress: Cloudflare Tunnel + wildcard DNS -----------------------------------
-# Mirrors docs/SETUP.md's manual steps: one tunnel, one `*` CNAME. Routing stays in
-# the committed docker-compose.tunnel.yml; the tunnel resource here is transport
-# identity only.
-tunnel_secret = random_.RandomPassword(f"{prefix}-tunnel-secret", length=48, special=False)
-tunnel_secret_b64 = tunnel_secret.result.apply(lambda s: base64.b64encode(s.encode()).decode())
+# --- ingress: consumed from the shared deploy/cloudflare stack ---------------------
+cloudflare = pulumi.StackReference(cloudflare_stack)
+tunnel_id = cloudflare.require_output("tunnelId")
+creds_json = cloudflare.require_output("credsJson")  # secret in the source stack
 
-tunnel = cloudflare.Tunnel(
-    f"{prefix}-tunnel",
-    account_id=cf_account_id,
-    name=prefix,
-    secret=tunnel_secret_b64,
-    config_src="local",  # ingress rules come from the repo's compose overlay
-)
-
-wildcard = cloudflare.Record(
-    f"{prefix}-wildcard",
-    zone_id=cf_zone_id,
-    name="*",
-    type="CNAME",
-    value=tunnel.id.apply(lambda i: f"{i}.cfargotunnel.com"),
-    proxied=True,
-    ttl=1,  # proxied records are always TTL "auto"
-)
-
-# The credentials JSON cloudflared expects, staged for the VM as a SecureString so
-# the secret rides SSM (KMS-encrypted, IAM-gated) instead of instance user-data.
+# Staged for the VM as a SecureString so the secret rides SSM (KMS-encrypted,
+# IAM-gated) instead of instance user-data.
 creds_param = aws.ssm.Parameter(
     f"{prefix}-tunnel-creds",
     name=f"/{prefix}/tunnel-creds",
     type="SecureString",
-    value=pulumi.Output.json_dumps(
-        {"AccountTag": cf_account_id, "TunnelSecret": tunnel_secret_b64, "TunnelID": tunnel.id}
-    ),
+    value=creds_json,
 )
 
 hf_param = None
@@ -257,7 +236,7 @@ docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d --build
 
 
 user_data = pulumi.Output.all(
-    tunnel_id=tunnel.id,
+    tunnel_id=tunnel_id,
     creds_param=creds_param.name,
     guardrail_id=guardrail.guardrail_id if guardrail else "",
     hf_param=hf_param.name if hf_param else "",
@@ -286,7 +265,7 @@ pulumi.export(
     "connect",
     pulumi.Output.concat("aws ssm start-session --target ", instance.id, " --region ", region),
 )
-pulumi.export("tunnelId", tunnel.id)
+pulumi.export("tunnelId", tunnel_id)
 pulumi.export(
     "guardrailId", guardrail.guardrail_id if guardrail else "(guardrail: " + guardrail_mode + ")"
 )

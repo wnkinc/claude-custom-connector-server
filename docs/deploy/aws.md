@@ -21,19 +21,39 @@ Prereqs on your workstation:
   zone's Overview page), and an **API token** with `Cloudflare Tunnel:Edit` +
   `DNS:Edit` on that zone.
 
-## 1. Configure the stack
+## 1. Ingress: the shared Cloudflare stack
+
+The tunnel + wildcard DNS record are their own stack, shared by every
+deployment path (a deployment moving between local and AWS keeps the same
+domain, tunnel, and credentials):
 
 ```bash
-cd deploy/aws
+cd deploy/cloudflare
+python3 -m venv venv && venv/bin/pip install -r requirements.txt
+pulumi stack init prod
+pulumi config set cloudflareAccountId <account-id>
+pulumi config set cloudflareZoneId <zone-id>
+export CLOUDFLARE_API_TOKEN=<token>
+pulumi up
+```
+
+The AWS stack reads its outputs itself — nothing to copy by hand.
+
+## 2. Configure the compute stack
+
+```bash
+cd ../aws
 python3 -m venv venv && venv/bin/pip install -r requirements.txt
 pulumi stack init prod
 pulumi config set aws:region us-east-1
 pulumi config set domain example.com
-pulumi config set cloudflareAccountId <account-id>
-pulumi config set cloudflareZoneId <zone-id>
+pulumi config set cloudflareStack organization/mcp-tools-cloudflare/prod
 pulumi config set tools xmcp,data            # your pick of xmcp,data,lean,telegram
-export CLOUDFLARE_API_TOKEN=<token>
 ```
+
+(`cloudflareStack` is the step-1 stack's full name on your shared Pulumi
+backend; `organization` is the literal org name on the local/self-managed
+backend.)
 
 Guardrail: `bedrock` is the default — the Guardrail resource, IAM permission,
 and `.env` wiring all come out of `pulumi up`. Alternatives:
@@ -50,13 +70,12 @@ Sizing: defaults are `t3.large` + 60 GB gp3 — right for `xmcp,data`. Enabling
 Running your own fork / a pinned version: `pulumi config set repoUrl <fork>`,
 `pulumi config set repoRef <tag-or-commit>`.
 
-## 2. `pulumi up`
+## 3. `pulumi up`
 
-Creates: Cloudflare Tunnel + wildcard `*` CNAME, the Bedrock Guardrail
-(prompt-attack filter only), an instance role (SSM + `ApplyGuardrail` + the two
-boot-secret reads), a zero-inbound security group, and the VM — whose first
-boot installs docker, clones the repo, renders the root `.env`, fetches the
-tunnel credentials from SSM, and runs
+Creates: the Bedrock Guardrail (prompt-attack filter only), an instance role
+(SSM + `ApplyGuardrail` + the two boot-secret reads), a zero-inbound security
+group, and the VM — whose first boot installs docker, clones the repo, renders
+the root `.env`, fetches the tunnel credentials from SSM, and runs
 `docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d --build`.
 
 First boot takes several minutes (image builds). Watch it:
@@ -67,7 +86,7 @@ sudo tail -f /var/log/cloud-init-output.log
 cd /opt/mcp-tools && sudo docker compose ps
 ```
 
-## 3. Google OAuth client (~5–10 min, manual)
+## 4. Google OAuth client (~5–10 min, manual)
 
 In the [Google Cloud Console](https://console.cloud.google.com/):
 
@@ -81,7 +100,7 @@ In the [Google Cloud Console](https://console.cloud.google.com/):
 
 One client covers all tools; a new tool adds one more redirect URI.
 
-## 4. Per-tool secrets (over the SSM session)
+## 5. Per-tool secrets (over the SSM session)
 
 For each tool, on the VM:
 
@@ -92,14 +111,14 @@ sudo nano tools/<tool>/.env
 ```
 
 Fill the tool's own values (documented in its `env.example`) plus the auth trio
-from step 3: `MCP_AUTH_ENABLED=1`, `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`,
+from step 4: `MCP_AUTH_ENABLED=1`, `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`,
 `MCP_ALLOWED_GOOGLE_EMAILS=<your email>`. Then restart with the new secrets:
 
 ```bash
 sudo docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d
 ```
 
-## 5. Approvals (Slack optional)
+## 6. Approvals (Slack optional)
 
 Approval-gated calls work out of the box via the approve-page link at
 `https://approval.example.com`. For one-click Slack cards, on the VM:
@@ -107,7 +126,7 @@ Approval-gated calls work out of the box via the approve-page link at
 follow the Slack-app steps inside it (Interactivity Request URL:
 `https://approval.example.com/slack/interact`), and `up -d` again.
 
-## 6. Verify + connect Claude
+## 7. Verify + connect Claude
 
 From anywhere:
 
@@ -126,15 +145,20 @@ Then Claude → Settings → Connectors → Add custom connector → each URL fr
   so exported lake data etc. rebuilds; treat the VM as disposable). For a
   code-only refresh in place: SSM in, `git -C /opt/mcp-tools pull`, `up -d
   --build`.
-- **Tear down everything:** `pulumi destroy` (tunnel, DNS, VM, guardrail, IAM,
-  parameters).
+- **Tear down the compute:** `pulumi destroy` in `deploy/aws` (VM, guardrail,
+  IAM, parameters). The tunnel + DNS live on in `deploy/cloudflare` — a local
+  deployment can pick them right up, and `pulumi destroy` there retires them
+  for good.
 - **Costs:** t3.large ≈ $60/mo + EBS (60 GB gp3 ≈ $5/mo) + Bedrock Guardrails
   per-scan (prompt-attack policy, fractions of a cent per screened result).
 
 ## Troubleshooting
 
-- **`pulumi up` fails on Cloudflare** — the API token needs both
+- **Step 1 fails on Cloudflare** — the API token needs both
   `Cloudflare Tunnel:Edit` (account-scoped) and `DNS:Edit` on the zone.
+- **Step 3 fails resolving `cloudflareStack`** — both stacks must live on the
+  same Pulumi backend, and the name must be fully qualified
+  (`organization/mcp-tools-cloudflare/<stack>`).
 - **Stack up, connector says "couldn't connect"** — on the VM check
   `sudo docker compose ps` (is `cloudflared` up?) and
   `sudo docker compose logs cloudflared` (creds/route errors appear here).

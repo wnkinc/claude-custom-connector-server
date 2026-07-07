@@ -8,10 +8,13 @@ between paths later by re-running the other runbook with the same domain.
 | | **Local** ([runbook](deploy/local.md)) | **AWS** ([runbook](deploy/aws.md)) |
 |---|---|---|
 | Host | your own Linux box | EC2 VM (default t3.large), created by `pulumi up` |
-| Ingress | Cloudflare Tunnel you create once with `cloudflared` | Cloudflare Tunnel + DNS created by Pulumi |
 | Guardrail default | `llamafirewall` — local model, needs a HF token | `bedrock` — Amazon Bedrock Guardrails API |
 | Admin access | it's your machine | SSM Session Manager (zero inbound ports) |
 | Cost | your hardware + electricity | ~$60/mo (t3.large) + EBS + Bedrock per-scan |
+
+Ingress is identical in both: the [deploy/cloudflare](../deploy/cloudflare/)
+Pulumi stack owns the tunnel + wildcard DNS, so a deployment can change hosts
+while keeping its domain, tunnel, and credentials.
 
 ## Decisions to make first (both paths)
 
@@ -28,7 +31,11 @@ between paths later by re-running the other runbook with the same domain.
 
 ## What every deployment needs (gathered up front)
 
-- A **domain on Cloudflare** (free plan is fine). Each tool gets a subdomain.
+- A **domain on Cloudflare** (free plan is fine), plus an **API token**
+  (`Cloudflare Tunnel:Edit` + `DNS:Edit`). Each tool gets a subdomain.
+- The **[Pulumi CLI](https://www.pulumi.com/docs/install/)** — it provisions
+  the ingress stack on both paths (and the VM on AWS). `pulumi login --local`
+  keeps state as a file on your machine; any shared backend works too.
 - A **Google Cloud OAuth client** (free) — “Sign in with Google” gating every
   tool to your email allowlist. Created by hand in both paths; each runbook
   walks through it.

@@ -54,8 +54,10 @@ The same image runs locally (`docker compose up`) and in the cloud — transport
 
 - **Deployment is a chooser, one stack.** `docs/DEPLOY.md` routes to two runbooks —
   your own box (`docs/deploy/local.md`) or an EC2 VM provisioned end-to-end by the
-  Pulumi program in `deploy/aws/` (`docs/deploy/aws.md`). Both run these same compose
-  files behind a Cloudflare Tunnel, so a deployment can move between paths later.
+  Pulumi program in `deploy/aws/` (`docs/deploy/aws.md`). Ingress is the shared
+  `deploy/cloudflare/` Pulumi stack (tunnel + wildcard DNS) on both paths, so a
+  deployment can change hosts later while keeping its domain, tunnel, and
+  credentials — both paths run these same compose files behind it.
 
 - **Tools never call each other; cooperation is an artifact plane.** When two tools need
   to cooperate (data produces the lake, lean backtests it), they share a named volume
@@ -105,11 +107,10 @@ inserts the compose service (opt-in `profiles:` entry + state volume) into
    hosts this tool must reach in its allowlist file.
 4. **Ingress** — a hostname route in the cloudflared `configs:` block of
    `docker-compose.tunnel.yml`, plus the service entry flipping its public posture
-   (`MCP_AUTH_ENABLED=1`, `MCP_PUBLIC_URL`). DNS is already covered by the one-time
-   wildcard record (see docs/deploy/local.md); with per-tool records, this is also the moment to
-   run `cloudflared tunnel route dns`. On a live stack, routes apply when cloudflared
-   is *recreated* (its config renders at `up`), and squid config changes need an
-   egress *restart* (single-file bind mounts keep the pre-pull inode).
+   (`MCP_AUTH_ENABLED=1`, `MCP_PUBLIC_URL`). DNS is already covered by the wildcard
+   record the `deploy/cloudflare/` stack owns. On a live stack, routes apply when
+   cloudflared is *recreated* (its config renders at `up`), and squid config changes
+   need an egress *restart* (single-file bind mounts keep the pre-pull inode).
 5. **Secrets & identity** — `cp env.example .env` and fill it; add the tool's
    `/auth/callback` URL to the shared Google OAuth client's authorized redirect URIs.
 6. **Enable** — add the tool to `COMPOSE_PROFILES` (root `.env` + `env.example`'s

@@ -17,7 +17,8 @@ tools/                     # one tool per dir: server.py + Dockerfile + requirem
   xmcp/                    #   X read-only search/lookup + Grok x_search (:8061)
   data/                    #   market data via OpenBB -> parquet lake (:8062)
   lean/                    #   QuantConnect Lean backtests of agent-authored algorithms (:8064)
-deploy/aws/                # the cloud path as code: pulumi up -> EC2 VM running this stack
+deploy/                    # IaC: cloudflare/ = shared ingress (tunnel+DNS, both paths);
+                           #   aws/ = EC2 VM running this stack (reads the ingress stack)
 scripts/new-tool.sh        # stamp a new tool
 docs/                      # DEPLOY.md chooser -> deploy/{local,aws}.md runbooks; ARCHITECTURE.md
 ```

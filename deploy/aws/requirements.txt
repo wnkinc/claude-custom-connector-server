@@ -1,6 +1,4 @@
-# Pulumi program deps. Providers are pinned to the major versions this program's
-# resource names target (cloudflare v6 renames Tunnel/Record; bump deliberately).
+# Pulumi program deps. The Cloudflare ingress lives in deploy/cloudflare (consumed
+# here via StackReference), so this stack needs only the AWS provider.
 pulumi>=3.130,<4
 pulumi-aws>=6.50,<7
-pulumi-cloudflare>=5.49,<6
-pulumi-random>=4.16,<5

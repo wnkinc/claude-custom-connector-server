@@ -11,7 +11,8 @@ Two local modes, same base file:
   tool. Skips everything below except steps 1–2.
 - **Public (auth on, tunnel):** the rest of this runbook; both compose files.
 
-Prereqs on the box: Docker + compose v2.20+, git.
+Prereqs on the box: Docker + compose v2.20+, git, and (for step 3) the
+[Pulumi CLI](https://www.pulumi.com/docs/install/).
 
 ## 1. Clone and pick your tools
 
@@ -41,31 +42,42 @@ Turning the screen **off** instead: remove `guardrail` from `COMPOSE_PROFILES`
 **and** set `GUARDRAIL_ENABLED=0` — the pair matters, because untrusted tools
 with screening on and the service absent withhold all results (fail closed).
 
-## 3. Cloudflare: domain, tunnel, DNS
+## 3. Cloudflare: domain, tunnel, DNS (the shared Pulumi stack)
 
-1. Domain on Cloudflare (any plan).
-2. [Install `cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/),
-   then:
+The tunnel and the wildcard DNS record are one Pulumi stack
+([deploy/cloudflare/](../../deploy/cloudflare/)), shared by every deployment
+path — create it once and it follows you if this deployment later moves to the
+cloud (same domain, tunnel, and credentials; only the host changes).
+
+1. Domain on Cloudflare (any plan). From the zone's **Overview** page grab the
+   **Zone ID** and **Account ID**.
+2. Dashboard → My Profile → **API Tokens** → create a token with
+   **Cloudflare Tunnel:Edit** + **DNS:Edit** on that zone.
+3. Create the stack:
    ```bash
-   cloudflared tunnel login
-   cloudflared tunnel create mcp-tools     # prints the tunnel UUID
+   cd deploy/cloudflare
+   python3 -m venv venv && venv/bin/pip install -r requirements.txt
+   pulumi login --local            # state stays on this box as a file
+   pulumi stack init prod          # pick a passphrase (PULUMI_CONFIG_PASSPHRASE)
+   pulumi config set cloudflareAccountId <account-id>
+   pulumi config set cloudflareZoneId <zone-id>
+   export CLOUDFLARE_API_TOKEN=<token>
+   pulumi up
    ```
-3. Set `TUNNEL_ID=<uuid>` and `MCP_DOMAIN=example.com` in `.env`, and stage the
-   credentials where the ingress sidecar mounts them (gitignored):
+4. Hand the outputs to the compose stack:
    ```bash
-   mkdir -p security/ingress/secrets
-   cp ~/.cloudflared/<TUNNEL_ID>.json security/ingress/secrets/creds.json
+   mkdir -p ../../security/ingress/secrets
+   pulumi stack output credsJson --show-secrets > ../../security/ingress/secrets/creds.json
+   pulumi stack output tunnelId    # -> TUNNEL_ID in the root .env
    ```
-4. **DNS — one wildcard record, once:** in the Cloudflare dashboard add
-   `CNAME`, name `*`, target `<TUNNEL_ID>.cfargotunnel.com`, proxied. Every
-   current and future tool subdomain then resolves with zero per-tool DNS
-   steps. This adds no exposure: DNS does no security work in this stack — the
-   committed tunnel overlay is the allowlist of what's actually served, and
-   cloudflared answers 404 for any hostname without a route. (Cloudflare
-   wildcards cover one label: `xmcp.example.com`, never `a.b.example.com`.)
-   Per-tool alternative: `cloudflared tunnel route dns <TUNNEL_ID>
-   <tool>.example.com` for each tool — and remember it for every new tool, or
-   its connector fails with "couldn't connect".
+   Set `TUNNEL_ID=<that id>` and `MCP_DOMAIN=example.com` in the root `.env`.
+
+The wildcard record covers every current and future tool subdomain with zero
+per-tool DNS steps, and adds no exposure: DNS does no security work in this
+stack — the committed tunnel overlay is the allowlist of what's actually
+served, and cloudflared answers 404 for any hostname without a route.
+(Cloudflare wildcards cover one label: `xmcp.example.com`, never
+`a.b.example.com`.)
 
 ## 4. Google OAuth client (~5–10 min)
 
