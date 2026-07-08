@@ -29,7 +29,9 @@ GET  /healthz                 -> {ready, provider, scanners, degraded}
 
 ```bash
 cd security/guardrail/service
-uv sync                       # installs llamafirewall + torch (multi-GB) in this venv
+uv sync --extra local         # the local-model stack (llamafirewall + torch, multi-GB);
+                              #   bedrock-only dev: plain `uv sync` (~20 packages, no torch —
+                              #   same split the Dockerfile's GUARDRAIL_PROVIDER build arg uses)
 
 # One-time for the llamafirewall provider: PromptGuard is a gated Meta model —
 # accept the license on its HF page, then

@@ -6,8 +6,14 @@
 # the tool image stays slim. This mirrors the hardened-host split, where the guardrail
 # is its own systemd unit and tools HTTP-call :8071.
 #
+# The ML stack itself is provider-gated: the GUARDRAIL_PROVIDER build arg (compose
+# passes the same env var that picks the runtime provider) decides whether the
+# `local` extra (llamafirewall -> torch/CUDA) is installed at all. A bedrock image
+# stays ~100 MB; only the llamafirewall flavor pays the multi-GB build.
+#
 # BUILD CONTEXT = this dir (self-contained; no shared ./security import):
-#   docker build -t mcp-guardrail security/guardrail/service
+#   docker build -t mcp-guardrail security/guardrail/service                  # local model
+#   docker build --build-arg GUARDRAIL_PROVIDER=bedrock -t mcp-guardrail ...  # API-only
 # ---------------------------------------------------------------------------------
 ARG BASE=public.ecr.aws/amazonlinux/amazonlinux@sha256:336b735f8f0aa1d591802beb01d2ef85c6a4a3f411ea4ffa35cad8ba5db282af
 
@@ -22,9 +28,12 @@ WORKDIR /app
 ENV UV_LINK_MODE=copy UV_PYTHON=python3.12
 # Lock + project metadata first so the heavy dependency layer caches across code edits.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+# Only the llamafirewall flavor installs the `local` extra (torch/CUDA and friends).
+ARG GUARDRAIL_PROVIDER=llamafirewall
+RUN uv sync --frozen --no-dev --no-install-project \
+    $([ "$GUARDRAIL_PROVIDER" = "llamafirewall" ] && echo "--extra local")
 
-# --- runtime: slim-ish (still carries torch), non-root, writable model cache ----------
+# --- runtime: non-root, writable model cache (torch only in the llamafirewall flavor) -
 FROM ${BASE}
 
 RUN dnf install -y python3.12 shadow-utils && dnf clean all \
