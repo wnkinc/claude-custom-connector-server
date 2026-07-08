@@ -7,10 +7,10 @@ between paths later by re-running the other runbook with the same domain.
 
 | | **Local** ([runbook](deploy/local.md)) | **AWS** ([runbook](deploy/aws.md)) |
 |---|---|---|
-| Host | your own Linux box | EC2 VM (default t3.large), created by `pulumi up` |
+| Host | your own Linux box | EC2 VM (default t3.small), created by `pulumi up` |
 | Guardrail default | `llamafirewall` — local model, needs a HF token | `bedrock` — Amazon Bedrock Guardrails API |
 | Admin access | it's your machine | SSM Session Manager (zero inbound ports) |
-| Cost | your hardware + electricity | ~$60/mo (t3.large) + EBS + Bedrock per-scan |
+| Cost | your hardware + electricity | ~$15/mo (t3.small) + EBS + Bedrock per-scan |
 
 Ingress is identical in both: the [deploy/cloudflare](../deploy/cloudflare/)
 Pulumi stack owns the tunnel + wildcard DNS, so a deployment can change hosts

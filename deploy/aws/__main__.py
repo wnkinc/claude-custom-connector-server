@@ -6,7 +6,7 @@ program consumes its `tunnelId`/`credsJson` outputs, so switching a deployment
 between local and AWS keeps the same domain, tunnel, and credentials.
 
 What this program owns (and `pulumi destroy` removes):
-  - an EC2 instance (default: t3.large, 60 GB gp3) that boots docker, clones the
+  - an EC2 instance (default: t3.small, 20 GB gp3) that boots docker, clones the
     repo at a pinned ref, renders the root .env, and brings up
     docker-compose.yml + docker-compose.tunnel.yml — behind a security group
     with zero inbound rules (tunnel + SSM agent dial out; admin access is SSM
@@ -24,13 +24,13 @@ Config (pulumi config set <key> <value>):
   cloudflareStack      (required)  StackReference to deploy/cloudflare, e.g.
                                    organization/mcp-tools-cloudflare/prod
                                    (same backend as this stack)
-  tools                default "xmcp,data" — comma list of tool profiles
+  tools                default "xmcp,telegram" — comma list of tool profiles
   guardrail            default "bedrock" — bedrock | llamafirewall | off
   hfToken              secret; llamafirewall mode only
   repoUrl              default: the upstream repo
   repoRef              default "main" — pin a tag/commit for reproducible deploys
-  instanceType         default "t3.large"
-  volumeGb             default 60 (lean's 13 GB base image wants more)
+  instanceType         default "t3.small" — fits the light tools; lean wants ≥ 8 GB RAM
+  volumeGb             default 20 (lean's 13 GB base image wants ≥ 100)
   aws:region           the deploy region (bedrock guardrail lives here too)
 """
 
@@ -46,12 +46,12 @@ UPSTREAM_REPO = "https://github.com/wnkinc/claude-custom-connector-server.git"
 cfg = pulumi.Config()
 domain = cfg.require("domain")
 cloudflare_stack = cfg.require("cloudflareStack")
-tools = [t.strip() for t in (cfg.get("tools") or "xmcp,data").split(",") if t.strip()]
+tools = [t.strip() for t in (cfg.get("tools") or "xmcp,telegram").split(",") if t.strip()]
 guardrail_mode = cfg.get("guardrail") or "bedrock"
 repo_url = cfg.get("repoUrl") or UPSTREAM_REPO
 repo_ref = cfg.get("repoRef") or "main"
-instance_type = cfg.get("instanceType") or "t3.large"
-volume_gb = cfg.get_int("volumeGb") or 60
+instance_type = cfg.get("instanceType") or "t3.small"
+volume_gb = cfg.get_int("volumeGb") or 20
 hf_token = cfg.get_secret("hfToken")
 
 if guardrail_mode not in ("bedrock", "llamafirewall", "off"):
