@@ -27,11 +27,12 @@ pulumi config set cloudflareStack organization/mcp-tools-cloudflare/prod
 pulumi up
 ```
 
-Config surface (defaults in parentheses): `tools` (`xmcp,data`), `guardrail`
+Config surface (defaults in parentheses): `tools` (`xmcp,telegram`), `guardrail`
 (`bedrock` | `llamafirewall` | `off`), `hfToken` (secret; llamafirewall mode),
 `repoUrl` (upstream), `repoRef` (`main` — pin a tag for reproducible deploys),
-`instanceType` (`t3.large`), `volumeGb` (`60`; enabling `lean` wants more — its
-base image alone is 13 GB).
+`instanceType` (`t3.small` — sized for the light tools), `volumeGb` (`20`;
+enabling `lean` wants ≥ 100 and a bigger instance — its base image alone is
+13 GB).
 
 Outputs: `connectorUrls` (paste into Claude → Settings → Connectors), `connect`
 (the SSM session command for dropping per-tool `.env` files onto the VM),

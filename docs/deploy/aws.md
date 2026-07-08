@@ -48,7 +48,7 @@ pulumi stack init prod
 pulumi config set aws:region us-east-1
 pulumi config set domain example.com
 pulumi config set cloudflareStack organization/mcp-tools-cloudflare/prod
-pulumi config set tools xmcp,data            # your pick of xmcp,data,lean,telegram
+pulumi config set tools xmcp,telegram        # your pick of xmcp,data,lean,telegram
 ```
 
 (`cloudflareStack` is the step-1 stack's full name on your shared Pulumi
@@ -65,8 +65,11 @@ pulumi config set --secret hfToken hf_...    #   + HF token (see the local runbo
 pulumi config set guardrail off              # unscreened; your call
 ```
 
-Sizing: defaults are `t3.large` + 60 GB gp3 — right for `xmcp,data`. Enabling
-`lean` wants `volumeGb` ≥ 100 (13 GB base image) and benefits from more CPU.
+Sizing: defaults are `t3.small` + 20 GB gp3 — right for the light tools
+(`xmcp`, `telegram`); the always-on substrate is small, and on this path the
+guardrail is a Bedrock API call rather than a local model. Enabling `data`
+wants extra disk for its parquet lake; enabling `lean` wants `volumeGb` ≥ 100
+(13 GB base image), ≥ 8 GB RAM (`t3.large` up), and benefits from more CPU.
 Running your own fork / a pinned version: `pulumi config set repoUrl <fork>`,
 `pulumi config set repoRef <tag-or-commit>`.
 
@@ -149,7 +152,7 @@ Then Claude → Settings → Connectors → Add custom connector → each URL fr
   IAM, parameters). The tunnel + DNS live on in `deploy/cloudflare` — a local
   deployment can pick them right up, and `pulumi destroy` there retires them
   for good.
-- **Costs:** t3.large ≈ $60/mo + EBS (60 GB gp3 ≈ $5/mo) + Bedrock Guardrails
+- **Costs:** t3.small ≈ $15/mo + EBS (20 GB gp3 ≈ $2/mo) + Bedrock Guardrails
   per-scan (prompt-attack policy, fractions of a cent per screened result).
 
 ## Troubleshooting
