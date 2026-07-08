@@ -39,7 +39,12 @@ services:
   # it off = drop "guardrail" from COMPOSE_PROFILES + set GUARDRAIL_ENABLED=0
   # (both in the root .env; the untrusted tools fail closed on a half-off state).
   guardrail:
-    build: ./security/guardrail/service
+    build:
+      context: ./security/guardrail/service
+      args:
+        # Same env var as the runtime switch below: the bedrock flavor's image
+        # skips the local-model stack (torch/CUDA, multi-GB) entirely.
+        GUARDRAIL_PROVIDER: ${GUARDRAIL_PROVIDER:-llamafirewall}
     image: mcp-guardrail
     profiles: ["guardrail"]
     restart: unless-stopped
