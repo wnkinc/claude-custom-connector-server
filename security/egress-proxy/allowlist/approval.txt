@@ -1,7 +1,10 @@
 # approval sidecar egress allowlist (squid dstdomain). The whole job: post the
-# Approve/Deny card (slack.com chat.postMessage / discord.com channel message)
-# and update it after a click (hooks.slack.com response_url; Discord updates
-# in the interaction response, no extra call). Nothing else, ever.
+# Approve/Deny card (slack.com chat.postMessage / discord.com channel message /
+# api.telegram.org sendMessage) and update it after a click (hooks.slack.com
+# response_url; Discord updates in the interaction response; Telegram edits the
+# card via api.telegram.org answerCallbackQuery + editMessageText). Nothing else,
+# ever. Only the active APPROVAL_PROVIDER's host is actually contacted.
 slack.com
 hooks.slack.com
 discord.com
+api.telegram.org
