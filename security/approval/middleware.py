@@ -114,30 +114,35 @@ class ApprovalMiddleware(Middleware):
             return await call_next(context)
         if decision == "denied":
             return _note(f"❌ The user denied `{action}`, so it was not performed.")
-        # Pending. `notified` reports whether the Slack card actually reached the
-        # human; default True so an older sidecar (no such field) isn't a false alarm.
+        # Pending. `notified` reports whether the card actually reached the human;
+        # default True so an older sidecar (no such field) isn't a false alarm.
+        # `channel_label` names the ACTIVE provider (e.g. "Telegram") so the message
+        # matches reality instead of listing platforms or guessing; the sidecar owns
+        # APPROVAL_PROVIDER, the tool doesn't, so it comes back on the gate response.
+        # Empty (older sidecar) => the generic phrasing, which still reads fine.
+        label = data.get("channel_label") or ""
+        where = f"{label} " if label else ""
         if not data.get("notified", True):
             return _note(
                 f"⚠️ `{action}` requires out-of-band human approval and was NOT "
-                "performed — and the approval request could not be delivered to the "
-                "approval channel (unconfigured or unreachable), so it cannot currently "
-                "be approved. The server operator needs to restore the approval channel "
-                "before this action can proceed."
+                f"performed — and the approval request could not be delivered to the "
+                f"{where}approval channel (unconfigured or unreachable), so it cannot "
+                "currently be approved. The server operator needs to restore the "
+                "approval channel before this action can proceed."
             )
         if not data.get("created"):
             return _note(
                 f"⏳ `{action}` is still awaiting human approval on the card in the "
-                "user's approval channel. Once approved there, calling the same tool "
-                "with the same arguments performs the action."
+                f"user's {where}approval channel. Once approved there, calling the same "
+                "tool with the same arguments performs the action."
             )
         return _note(
             f"⏸ Approval required — `{action}` was NOT performed.\n\n"
             "This server gates this tool behind out-of-band human approval: an "
-            "Approve/Deny card for this exact action has been posted to the user's "
-            "approval channel (Slack, Discord, or Telegram, per the server's setup). Once the "
-            "user approves it there, calling the same tool again with the same "
-            "arguments performs the action; until then it reports still-pending. "
-            "Denying it cancels the action."
+            f"Approve/Deny card for this exact action has been posted to the user's "
+            f"{where}approval channel. Once the user approves it there, calling the "
+            "same tool again with the same arguments performs the action; until then "
+            "it reports still-pending. Denying it cancels the action."
         )
 
 
