@@ -59,6 +59,16 @@ _TTL_SECONDS = 600  # approval links expire after 10 minutes
 _PROVIDERS_IMPLEMENTED = {"slack", "discord", "telegram"}
 _PROVIDERS_PLANNED: set[str] = set()
 
+# Human-readable name of the ACTIVE provider, so the model-facing gate message can
+# say "posted to your Telegram approval channel" instead of guessing (or naming the
+# wrong platform). The tool process doesn't know APPROVAL_PROVIDER -- only the
+# sidecar does -- so /gate hands this back and the middleware surfaces it.
+_PROVIDER_LABELS = {"slack": "Slack", "discord": "Discord", "telegram": "Telegram"}
+
+
+def _channel_label() -> str:
+    return _PROVIDER_LABELS.get(_provider(), "")
+
 
 def _provider() -> str:
     return os.getenv("APPROVAL_PROVIDER", "slack").strip().lower()
@@ -125,7 +135,14 @@ async def gate(request):  # type: ignore[no-untyped-def]
         if rec["status"] == "denied":
             _PENDING.pop(token, None)
             return JSONResponse({"decision": "denied"})
-        return JSONResponse({"decision": "pending", "created": False, "notified": rec["notified"]})
+        return JSONResponse(
+            {
+                "decision": "pending",
+                "created": False,
+                "notified": rec["notified"],
+                "channel_label": _channel_label(),
+            }
+        )
 
     token = secrets.token_urlsafe(24)
     rec = {
@@ -140,7 +157,14 @@ async def gate(request):  # type: ignore[no-untyped-def]
     # links in tool output trip injection screening), so delivery is load-bearing:
     # report it and let the middleware fail loud instead of waiting on a card nobody got.
     rec["notified"] = await _notify(token, action, source)
-    return JSONResponse({"decision": "pending", "created": True, "notified": rec["notified"]})
+    return JSONResponse(
+        {
+            "decision": "pending",
+            "created": True,
+            "notified": rec["notified"],
+            "channel_label": _channel_label(),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
