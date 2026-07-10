@@ -109,6 +109,14 @@ def serve(
     require_approval = _env_override("MCP_REQUIRE_APPROVAL", require_approval)
     untrusted_output = _env_override("MCP_UNTRUSTED_OUTPUT", untrusted_output)
 
+    # SPIKE (throwaway, SPIKE_APPROVAL_WIDGET=1): register the in-chat approval-widget
+    # probe. Runs BEFORE the middleware blocks so it can extend the exempt allowlists its
+    # helper tools rely on (MCP_APPROVAL_EXEMPT / MCP_GUARDRAIL_EXEMPT).
+    if _is_truthy(os.getenv("SPIKE_APPROVAL_WIDGET")):
+        from security.approval.widget_spike import register_widget_spike
+
+        register_widget_spike(mcp)
+
     if require_approval:
         # State + the human-facing pages live in the approval sidecar (APPROVAL_URL);
         # this middleware is only the per-tool client (source scopes its approvals).
@@ -135,7 +143,12 @@ def serve(
         )
         mcp.instructions = f"{mcp.instructions}\n\n{note}" if mcp.instructions else note
     if untrusted_output:
-        mcp.add_middleware(GuardrailMiddleware(source=guardrail_source or mcp.name))
+        mcp.add_middleware(
+            GuardrailMiddleware(
+                source=guardrail_source or mcp.name,
+                exempt=_csv_set(os.getenv("MCP_GUARDRAIL_EXEMPT")),
+            )
+        )
         # The guardrail nulls each result's structuredContent (screening replaces it with
         # text). A tool that still advertises an outputSchema then violates the MCP rule
         # "outputSchema => conforming structuredContent", so the Claude connector rejects

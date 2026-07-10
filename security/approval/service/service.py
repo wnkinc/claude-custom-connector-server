@@ -163,6 +163,11 @@ async def gate(request):  # type: ignore[no-untyped-def]
             "created": True,
             "notified": rec["notified"],
             "channel_label": _channel_label(),
+            # The capability token, returned ONLY to the trusted server-side caller (a
+            # tool/middleware over the internal net -- the model never calls /gate). It
+            # lets an in-chat approval widget redeem the decision; it must never reach
+            # model-visible output (goes in _meta or the widget HTML, never in content).
+            "token": token,
         }
     )
 
@@ -214,8 +219,11 @@ async def approve_route(request):  # type: ignore[no-untyped-def]
             status_code=404,
         )
     if request.method == "POST":
-        form = await request.form()
-        decision = form.get("decision")
+        # Parse the urlencoded body ourselves rather than request.form(), which needs
+        # python-multipart (not a dep) and 500s without it -- this endpoint is POSTed
+        # by both the human approval page's form and the in-chat widget's approve tool.
+        body = urllib.parse.parse_qs((await request.body()).decode())
+        decision = (body.get("decision") or [None])[0]
         if decision == "approve":
             rec["status"] = "approved"
             return HTMLResponse(

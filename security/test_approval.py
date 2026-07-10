@@ -73,13 +73,12 @@ def test_gate_creates_then_reports_pending(slack_ok):
     c = TestClient(svc.app)
     first = _gate(c)
     # No approve_url in the model-facing response: the link lives on the card only.
-    # channel_label names the active provider so the model-facing message matches it.
-    assert first == {
-        "decision": "pending",
-        "created": True,
-        "notified": True,
-        "channel_label": "Slack",
-    }
+    # channel_label names the active provider so the model-facing message matches it;
+    # token is the capability token, returned ONLY to the trusted server-side caller
+    # (never model-visible) so an in-chat approval widget can redeem it.
+    assert first["decision"] == "pending" and first["created"] is True
+    assert first["notified"] is True and first["channel_label"] == "Slack"
+    assert first["token"] == _token()
     again = _gate(c)
     assert again == {
         "decision": "pending",
