@@ -14,11 +14,12 @@ webhooks (Slack HMAC / Discord Ed25519) and the capability-token page -- all
 human-driven. A compromised tool cannot flip its own approvals.
 
 Endpoints:
-  POST /gate              (internal) create-or-check an approval for a tool call
-  GET/POST /approve/{token}    (public via tunnel) the human approval page
-  POST /slack/interact    (public via tunnel) Slack button clicks, HMAC-verified
-  POST /discord/interact  (public via tunnel) Discord button clicks, Ed25519-verified
-  GET /healthz            liveness + config visibility
+  POST /gate               (internal) create-or-check an approval for a tool call
+  GET/POST /approve/{token}     (public via tunnel) the human approval page
+  POST /slack/interact     (public via tunnel) Slack button clicks, HMAC-verified
+  POST /discord/interact   (public via tunnel) Discord button clicks, Ed25519-verified
+  POST /telegram/interact  (public via tunnel) Telegram button clicks, secret-token-verified
+  GET /healthz             liveness + config visibility
 
 Single uvicorn process => a plain in-memory dict is fine for pending approvals
 (they are 10-minute ephemera; a restart just re-prompts).
@@ -49,12 +50,14 @@ log = logging.getLogger("approval")
 _PENDING: dict[str, dict] = {}
 _TTL_SECONDS = 600  # approval links expire after 10 minutes
 
-# The out-of-band platform that delivers approval cards; "telegram" is planned.
+# The out-of-band platform that delivers approval cards.
 # Human-in-the-loop only works if the platform is one the agent does NOT operate:
-# a card the agent's tools can see and press is a gate that approves itself
-# (e.g. the telegram provider while the telegram TOOL runs on the same account).
-_PROVIDERS_IMPLEMENTED = {"slack", "discord"}
-_PROVIDERS_PLANNED = {"telegram"}
+# a card the agent's tools can see and press is a gate that approves itself. This
+# is allowed but load-bearing on operator judgment -- most sharply for telegram,
+# where running this provider on the same account the telegram TOOL operates lets
+# the agent read the card and (if it can send) press its own buttons.
+_PROVIDERS_IMPLEMENTED = {"slack", "discord", "telegram"}
+_PROVIDERS_PLANNED: set[str] = set()
 
 
 def _provider() -> str:
@@ -63,7 +66,11 @@ def _provider() -> str:
 
 def _channel_configured() -> bool:
     """Does the ACTIVE provider have the env it needs to reach a human?"""
-    return {"slack": _slack_enabled, "discord": _discord_enabled}.get(_provider(), lambda: False)()
+    return {
+        "slack": _slack_enabled,
+        "discord": _discord_enabled,
+        "telegram": _telegram_enabled,
+    }.get(_provider(), lambda: False)()
 
 
 async def _notify(token: str, action: str, source: str) -> bool:
@@ -78,6 +85,8 @@ async def _notify(token: str, action: str, source: str) -> bool:
         return await _slack_post_approval(token, action, source)
     if provider == "discord":
         return await _discord_post_approval(token, action, source)
+    if provider == "telegram":
+        return await _telegram_post_approval(token, action, source)
     log.error(
         "APPROVAL_PROVIDER=%r is not implemented (implemented: %s; planned: %s)",
         provider,
@@ -442,6 +451,135 @@ async def discord_interact(request):  # type: ignore[no-untyped-def]
     return JSONResponse({"type": 7, "data": {"content": msg, "components": []}})
 
 
+# ---------------------------------------------------------------------------
+# Telegram provider: a BOT posts the card and receives clicks as callback_query
+# updates on a webhook. Unlike Slack/Discord, Telegram does not sign the request
+# body; setWebhook registers a secret_token it echoes in a header on every update,
+# and that shared secret is the gate. The bot's identity is separate from the
+# telegram TOOL's user session -- but if the tool's account can see the approval
+# chat, the agent can read the card, so keep approvals in a chat that account is
+# not in (see env.example).
+# ---------------------------------------------------------------------------
+def _telegram_enabled() -> bool:
+    return bool(
+        os.getenv("TELEGRAM_APPROVAL_BOT_TOKEN")
+        and os.getenv("TELEGRAM_APPROVAL_CHAT_ID")
+        and os.getenv("TELEGRAM_APPROVAL_WEBHOOK_SECRET")
+    )
+
+
+async def _telegram_call(client, bot_token: str, method: str, payload: dict):  # type: ignore[no-untyped-def]
+    return await client.post(f"https://api.telegram.org/bot{bot_token}/{method}", json=payload)
+
+
+async def _telegram_post_approval(token: str, action: str, source: str) -> bool:
+    """Post an Approve/Deny card to the Telegram chat. Same contract as the others:
+    True only when Telegram accepted the message; never raises."""
+    if not _telegram_enabled():
+        return False
+    # Plain text (no parse_mode): the action is arbitrary tool-call text and would
+    # routinely break Telegram's strict Markdown entity parser -> a 400 and an
+    # UNDELIVERED card. Delivery is load-bearing here (an undelivered card fails
+    # loud), so robustness beats formatting; Telegram auto-links the bare URL.
+    text = f"⏸ Approval requested — {source}\n> {action}"
+    if os.getenv("APPROVAL_PUBLIC_URL"):
+        text += f"\nApproval page (fallback if the buttons fail): {_approve_link(token)}"
+    payload = {
+        "chat_id": os.environ["TELEGRAM_APPROVAL_CHAT_ID"],
+        "text": text,
+        "reply_markup": {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Approve", "callback_data": f"approve:{token}"},
+                    {"text": "❌ Deny", "callback_data": f"deny:{token}"},
+                ]
+            ]
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await _telegram_call(
+                client, os.environ["TELEGRAM_APPROVAL_BOT_TOKEN"], "sendMessage", payload
+            )
+        data = resp.json()
+        if not data.get("ok"):
+            log.error("Telegram sendMessage failed: %s", data.get("description"))
+            return False
+        return True
+    except Exception:  # noqa: BLE001
+        log.exception("Telegram approval post failed")
+        return False
+
+
+def _verify_telegram_secret(secret_header: str) -> bool:
+    """Verify Telegram's webhook secret token.
+
+    Telegram doesn't sign the update body (no HMAC/Ed25519 like Slack/Discord):
+    setWebhook registers a secret_token that Telegram echoes in the
+    X-Telegram-Bot-Api-Secret-Token header on every update. It's a shared secret,
+    a weaker guarantee than a per-request signature, but it is the mechanism
+    Telegram provides -- and the tunnel serves this endpoint over HTTPS only, so
+    the secret stays confidential in transit.
+    """
+    secret = os.getenv("TELEGRAM_APPROVAL_WEBHOOK_SECRET", "")
+    if not (secret and secret_header):
+        return False
+    return hmac.compare_digest(secret, secret_header)
+
+
+async def telegram_interact(request):  # type: ignore[no-untyped-def]
+    if not _verify_telegram_secret(request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")):
+        return PlainTextResponse("bad secret", status_code=403)
+
+    payload = json.loads(await request.body() or "{}")
+    cq = payload.get("callback_query")
+    if not cq:  # only inline-button clicks decide; ignore any other update type
+        return Response(status_code=200)
+    action_id, _, token = (cq.get("data") or "").partition(":")
+
+    _prune()
+    rec = _PENDING.get(token)
+    if rec is None:
+        msg = "⚠️ This approval has expired."
+    elif action_id == "approve":
+        rec["status"] = "approved"
+        msg = f"✅ Approved\n> {rec['action']}\n\nReturn to Claude and tell it to continue."
+    elif action_id == "deny":
+        rec["status"] = "denied"
+        msg = f"❌ Denied\n> {rec['action']}"
+    else:
+        msg = "Unknown action."
+
+    # Separate API calls (not a reply-in-webhook-body): clear the button's spinner,
+    # then replace the message text and drop the inline keyboard. Best-effort -- the
+    # decision above is already recorded, so a failed edit doesn't lose it.
+    bot_token = os.getenv("TELEGRAM_APPROVAL_BOT_TOKEN", "")
+    message = cq.get("message") or {}
+    chat_id = (message.get("chat") or {}).get("id")
+    message_id = message.get("message_id")
+    if bot_token:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                await _telegram_call(
+                    client, bot_token, "answerCallbackQuery", {"callback_query_id": cq.get("id")}
+                )
+                if chat_id is not None and message_id is not None:
+                    await _telegram_call(
+                        client,
+                        bot_token,
+                        "editMessageText",
+                        {
+                            "chat_id": chat_id,
+                            "message_id": message_id,
+                            "text": msg,
+                            "reply_markup": {"inline_keyboard": []},
+                        },
+                    )
+        except Exception:  # noqa: BLE001
+            log.exception("Telegram callback update failed")
+    return Response(status_code=200)
+
+
 async def healthz(request):  # type: ignore[no-untyped-def]
     provider = _provider()
     return JSONResponse(
@@ -461,6 +599,7 @@ app = Starlette(
         Route("/approve/{token}", approve_route, methods=["GET", "POST"]),
         Route("/slack/interact", slack_interact, methods=["POST"]),
         Route("/discord/interact", discord_interact, methods=["POST"]),
+        Route("/telegram/interact", telegram_interact, methods=["POST"]),
         Route("/healthz", healthz, methods=["GET"]),
     ]
 )

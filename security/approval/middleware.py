@@ -4,8 +4,9 @@ claude.ai gives us no reliable in-chat gate: tool-approval is sticky (approve on
 and it's approved across every chat; the connector "needs approval" setting stops
 applying), and MCP elicitation dialogs don't render for custom connectors (tested).
 So a gated tool short-circuits to a plain pending status, an Approve/Deny card is
-pushed to the operator's approval channel (Slack or Discord -- the sidecar's
-APPROVAL_PROVIDER), and the action runs ONLY after the human decides out-of-band.
+pushed to the operator's approval channel (Slack, Discord, or Telegram -- the
+sidecar's APPROVAL_PROVIDER), and the action runs ONLY after the human decides
+out-of-band.
 The model can't press the button or forge the server-side "approved" state, so
 this is a real gate.
 
@@ -133,7 +134,7 @@ class ApprovalMiddleware(Middleware):
             f"⏸ Approval required — `{action}` was NOT performed.\n\n"
             "This server gates this tool behind out-of-band human approval: an "
             "Approve/Deny card for this exact action has been posted to the user's "
-            "approval channel (Slack or Discord, per the server's setup). Once the "
+            "approval channel (Slack, Discord, or Telegram, per the server's setup). Once the "
             "user approves it there, calling the same tool again with the same "
             "arguments performs the action; until then it reports still-pending. "
             "Denying it cancels the action."
