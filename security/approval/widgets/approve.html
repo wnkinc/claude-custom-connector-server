@@ -19,7 +19,10 @@
       --warn:#e5c25a; --warn-bg:#2a2410; color-scheme:dark; }
   }
   html,body{margin:0}
-  body{font:13.5px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--surface);color:var(--ink);padding:12px}
+  /* Start with NO padding and the card hidden: a gated tool is tagged as a widget tool,
+     so the host draws this iframe on EVERY call to it (incl. the approved re-run). We
+     reveal only for an actual pending approval -> the success re-run never flashes. */
+  body{font:13.5px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--surface);color:var(--ink);padding:0}
   .card{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden}
   .body{padding:14px 16px}
   .head{display:flex;align-items:center;gap:8px;font-weight:650;font-size:14px}
@@ -56,7 +59,7 @@
   window.diag = (m) => { const d=document.getElementById("diag"); if(d) d.textContent += m+"\n"; };
   ["error","unhandledrejection"].forEach((k)=>addEventListener(k,(e)=>diag("PAGE ERROR: "+(e.reason?.message??e.reason??e.message??k))));
 </script>
-<div class="card">
+<div class="card" id="card" hidden>
   <div class="body" id="pending">
     <div class="head"><span class="dot">⏸</span> Approval requested</div>
     <div class="sub">A tool needs your OK before it runs.</div>
@@ -82,13 +85,14 @@
 <script type="module">
 const { App } = globalThis.ExtApps;
 const $ = (id) => document.getElementById(id);
+const PUBLIC_BASE = "__APPROVAL_PUBLIC_BASE__";  // baked in by the resource handler
 let ctx = null;
 
 function parsePayload(text) {
-  try { return JSON.parse(text); } catch {}
-  const m = text && text.match(/\{[\s\S]*\}/);
-  if (m) { try { return JSON.parse(m[0]); } catch {} }
-  return null;
+  // The pending result is prose for the model + an HTML-comment marker for us.
+  const m = text && text.match(/<!--APPROVAL\s+(\{[\s\S]*?\})\s*-->/);
+  if (m) { try { return JSON.parse(m[1]); } catch {} }
+  return null;  // no marker -> not a pending request (e.g. the approved re-run's result)
 }
 
 function showResult(kind, statusHtml, instructHtml) {
@@ -108,26 +112,18 @@ async function decide(decision) {
   diag(`decision=${decision}; token=${ctx.token.slice(0,6)}…`);
   let flipped = false;
 
-  // PRIMARY: direct POST to the sidecar — session-independent, needs csp.connectDomains.
-  if (ctx.public_base) {
-    try {
-      await fetch(`${ctx.public_base}/approve/${ctx.token}`, {
-        method: "POST", mode: "no-cors",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: "decision=" + decision,
-      });
-      flipped = true;
-      diag("B direct-fetch: SENT (CSP allowed it)");
-    } catch (e) { diag("B direct-fetch: BLOCKED — " + (e?.message ?? e)); }
-  }
-  // FALLBACK: callServerTool (rides the MCP session; may already be gone post-turn).
-  if (!flipped) {
-    try {
-      const r = await app.callServerTool({ name: "approve_gate", arguments: { token: ctx.token, decision } });
-      flipped = /HTTP 200/.test(JSON.stringify(r));
-      diag("A callServerTool: " + JSON.stringify(r).slice(0,160));
-    } catch (e) { diag("A callServerTool FAILED: " + (e?.message ?? e)); }
-  }
+  // Direct POST to the sidecar — session-independent (csp.connectDomains, honored on
+  // web+desktop). no-cors: the request lands even though the opaque response can't be
+  // read; a thrown "Failed to fetch" means CSP blocked it.
+  try {
+    await fetch(`${PUBLIC_BASE}/approve/${ctx.token}`, {
+      method: "POST", mode: "no-cors",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "decision=" + decision,
+    });
+    flipped = true;
+    diag("direct-fetch: SENT");
+  } catch (e) { diag("direct-fetch: BLOCKED — " + (e?.message ?? e)); }
 
   if (!flipped) { showInlineErr("Couldn't reach the approval service. Try again."); return; }
 
@@ -154,16 +150,19 @@ function showInlineErr(msg) {
 
 const app = new App({ name: "approval-widget", version: "0.2.0" }, {}, { autoResize: true });
 app.ontoolresult = (result) => {
-  diag("toolresult keys: " + Object.keys(result || {}).join(","));
-  ctx = parsePayload(result?.content?.[0]?.text ?? "");
-  if (ctx?.token) {
-    $("action").textContent = ctx.action ?? "(no action)";
-    diag("token parsed ✓; public_base=" + (ctx.public_base ?? "—"));
-  } else {
-    $("action").textContent = ctx?.action ?? "(could not read the request)";
-    $("approve").disabled = true; $("deny").disabled = true;
-    diag("NO token in payload; keys=" + Object.keys(ctx || {}).join(","));
+  const text = result?.content?.[0]?.text ?? "";
+  diag("toolresult: " + text.slice(0, 100));
+  const p = parsePayload(text);
+  if (p?.token) {
+    // A gated call is waiting for approval → REVEAL the card (it starts hidden).
+    ctx = p;
+    $("action").textContent = p.action ?? "(no action)";
+    document.body.style.padding = "12px";
+    $("card").hidden = false;
+    diag("pending ✓; base=" + PUBLIC_BASE);
   }
+  // else: not a pending request (the approved re-run's real result) → stay hidden.
+  // Nothing to do; the card was never shown, so there's no flash to collapse.
 };
 $("approve").addEventListener("click", () => decide("approve"));
 $("deny").addEventListener("click", () => decide("deny"));

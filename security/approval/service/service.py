@@ -141,6 +141,7 @@ async def gate(request):  # type: ignore[no-untyped-def]
                 "created": False,
                 "notified": rec["notified"],
                 "channel_label": _channel_label(),
+                "token": token,
             }
         )
 

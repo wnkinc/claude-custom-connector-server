@@ -74,6 +74,7 @@ class ApprovalMiddleware(Middleware):
         source: str = "mcp",
         approval_url: str | None = None,
         timeout: float = 10.0,
+        widget: bool = False,
     ) -> None:
         self._exempt = exempt or set()
         self.source = source
@@ -81,6 +82,11 @@ class ApprovalMiddleware(Middleware):
             approval_url or os.getenv("APPROVAL_URL", "http://127.0.0.1:8072")
         ).rstrip("/")
         self.timeout = timeout
+        # Widget mode: the in-chat approval widget IS the channel, so a pending result
+        # carries the capability token (harmless -- no tool flips the gate, the model
+        # can't fetch) as a JSON payload the widget reads; the tool is tagged elsewhere
+        # (WidgetMetaMiddleware) so this result renders the card. No out-of-band card needed.
+        self._widget = widget
 
     async def on_call_tool(self, context, call_next):  # type: ignore[no-untyped-def]
         tool_name = context.message.name
@@ -114,6 +120,23 @@ class ApprovalMiddleware(Middleware):
             return await call_next(context)
         if decision == "denied":
             return _note(f"❌ The user denied `{action}`, so it was not performed.")
+
+        # Widget mode: the model reads the SAME explicit prose as the non-widget path
+        # (that's what makes it reliably re-call after approval, per main), and the token
+        # for the in-chat card rides an HTML comment the model ignores and the widget
+        # parses. Do NOT swap this for a JSON blob -- terse JSON + a visible widget makes
+        # the model assume the card executes the action and claim premature success.
+        if self._widget:
+            marker = json.dumps({"token": data.get("token", ""), "action": action})
+            return _note(
+                f"⏸ Approval required — `{action}` was NOT performed and has NOT been sent. "
+                "An Approve/Deny card is shown in the chat. This action performs ONLY when "
+                "you call this same tool again with the same arguments AFTER the user "
+                "approves it in the card and tells you to continue; until then it stays "
+                "pending. Do NOT tell the user it was done until that second call succeeds.\n"
+                f"<!--APPROVAL {marker}-->"
+            )
+
         # Pending. `notified` reports whether the card actually reached the human;
         # default True so an older sidecar (no such field) isn't a false alarm.
         # `channel_label` names the ACTIVE provider (e.g. "Telegram") so the message

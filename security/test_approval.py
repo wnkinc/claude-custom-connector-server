@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import importlib.util
 import json
+import re
 import time
 import urllib.parse
 from pathlib import Path
@@ -85,6 +86,7 @@ def test_gate_creates_then_reports_pending(slack_ok):
         "created": False,
         "notified": True,
         "channel_label": "Slack",
+        "token": first["token"],  # re-ask returns the SAME pending's token (for a re-render)
     }
     assert len(svc._PENDING) == 1  # same approval, not a new one per ask
 
@@ -97,6 +99,7 @@ def test_gate_reports_undelivered_slack():
         "created": False,
         "notified": False,
         "channel_label": "Slack",
+        "token": _token(),
     }
 
 
@@ -438,6 +441,18 @@ def test_middleware_names_the_active_provider(telegram_env, monkeypatch):
     text = _pending_text(mw)
     assert "Telegram approval channel" in text
     assert "Slack" not in text and "Discord" not in text
+
+
+def test_middleware_widget_mode_prose_for_model_token_for_widget(slack_ok, monkeypatch):
+    # Widget mode: the model reads explicit prose (so it re-calls and doesn't claim
+    # premature success); the token for the card rides an HTML-comment marker.
+    mw = _middleware_against_service(monkeypatch, widget=True)
+    text = asyncio.run(mw.on_call_tool(_ctx(), _ran)).content[0].text
+    assert "was NOT performed" in text and "call this same tool again" in text
+    marker = re.search(r"<!--APPROVAL\s+(\{.*?\})\s*-->", text)
+    assert marker, "widget marker missing"
+    payload = json.loads(marker.group(1))
+    assert payload["token"] == _sole_token() and "send_message" in payload["action"]
 
 
 def test_middleware_messages_carry_no_link_or_directives(slack_ok, monkeypatch):

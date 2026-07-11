@@ -121,7 +121,11 @@ def serve(
         # State + the human-facing pages live in the approval sidecar (APPROVAL_URL);
         # this middleware is only the per-tool client (source scopes its approvals).
         mcp.add_middleware(
-            ApprovalMiddleware(exempt=_csv_set(os.getenv(approval_exempt_env)), source=mcp.name)
+            ApprovalMiddleware(
+                exempt=_csv_set(os.getenv(approval_exempt_env)),
+                source=mcp.name,
+                widget=_is_truthy(os.getenv("SPIKE_APPROVAL_WIDGET")),
+            )
         )
         # Pre-declare the approval protocol in the server-level instructions (a
         # list-time, trusted channel) so a pending status arrives as expected
