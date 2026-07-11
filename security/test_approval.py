@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import importlib.util
 import json
+import re
 import time
 import urllib.parse
 from pathlib import Path
@@ -72,23 +73,40 @@ def _sole_token():
 def test_gate_creates_then_reports_pending(slack_ok):
     c = TestClient(svc.app)
     first = _gate(c)
-    # No approve_url in the model-facing response: the link lives on the Slack card only.
-    assert first == {"decision": "pending", "created": True, "notified": True}
+    # No approve_url in the model-facing response: the link lives on the card only.
+    # channel_label names the active provider so the model-facing message matches it;
+    # token is the capability token, returned ONLY to the trusted server-side caller
+    # (never model-visible) so an in-chat approval widget can redeem it.
+    assert first["decision"] == "pending" and first["created"] is True
+    assert first["notified"] is True and first["channel_label"] == "Slack"
+    assert first["token"] == _token()
     again = _gate(c)
-    assert again == {"decision": "pending", "created": False, "notified": True}
+    assert again == {
+        "decision": "pending",
+        "created": False,
+        "notified": True,
+        "channel_label": "Slack",
+        "token": first["token"],  # re-ask returns the SAME pending's token (for a re-render)
+    }
     assert len(svc._PENDING) == 1  # same approval, not a new one per ask
 
 
 def test_gate_reports_undelivered_slack():
     c = TestClient(svc.app)  # fixture default: Slack unconfigured
     assert _gate(c)["notified"] is False
-    assert _gate(c) == {"decision": "pending", "created": False, "notified": False}
+    assert _gate(c) == {
+        "decision": "pending",
+        "created": False,
+        "notified": False,
+        "channel_label": "Slack",
+        "token": _token(),
+    }
 
 
 def test_unimplemented_provider_fails_closed(slack_ok, monkeypatch):
     # Slack delivery would succeed, but the configured provider isn't slack:
     # dispatch must not fall through to it -- the approval reports undeliverable.
-    monkeypatch.setenv("APPROVAL_PROVIDER", "telegram")
+    monkeypatch.setenv("APPROVAL_PROVIDER", "whatsapp")
     assert _gate(TestClient(svc.app))["notified"] is False
 
 
@@ -96,7 +114,7 @@ def test_healthz_reports_provider(monkeypatch):
     c = TestClient(svc.app)
     h = c.get("/healthz").json()
     assert h["ok"] is True and h["provider"] == "slack" and h["channel"] == "unconfigured"
-    monkeypatch.setenv("APPROVAL_PROVIDER", "telegram")
+    monkeypatch.setenv("APPROVAL_PROVIDER", "whatsapp")
     assert c.get("/healthz").json()["ok"] is False
 
 
@@ -291,6 +309,92 @@ def test_discord_expired_token_decides_nothing(discord_keys):
     assert _gate(c)["decision"] == "pending"
 
 
+# --- the Telegram webhook: the setWebhook secret token is the gate -------------------
+
+
+@pytest.fixture
+def telegram_env(monkeypatch):
+    """Telegram provider configured; the outbound bot API is stubbed (no network)."""
+    monkeypatch.setenv("APPROVAL_PROVIDER", "telegram")
+    monkeypatch.setenv("TELEGRAM_APPROVAL_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_APPROVAL_CHAT_ID", "555")
+    monkeypatch.setenv("TELEGRAM_APPROVAL_WEBHOOK_SECRET", "hook-secret")
+    calls = []
+
+    async def _rec(client, bot_token, method, payload):
+        calls.append((method, payload))
+        return SimpleNamespace(status_code=200, json=lambda: {"ok": True})
+
+    monkeypatch.setattr(svc, "_telegram_call", _rec)
+    return calls
+
+
+def _telegram_click(client, token, action_id, secret="hook-secret"):
+    payload = {
+        "callback_query": {
+            "id": "cq1",
+            "data": f"{action_id}:{token}",
+            "message": {"message_id": 7, "chat": {"id": 555}},
+        }
+    }
+    return client.post(
+        "/telegram/interact",
+        content=json.dumps(payload).encode(),
+        headers={
+            "X-Telegram-Bot-Api-Secret-Token": secret,
+            "Content-Type": "application/json",
+        },
+    )
+
+
+def test_telegram_gate_posts_card(telegram_env):
+    # notified=True proves _telegram_post_approval ran its sendMessage stub.
+    assert _gate(TestClient(svc.app))["notified"] is True
+    assert telegram_env[0][0] == "sendMessage"
+    assert "callback_data" in json.dumps(telegram_env[0][1])
+
+
+def test_telegram_rejects_bad_secret(telegram_env):
+    c = TestClient(svc.app)
+    _gate(c)
+    assert _telegram_click(c, _token(), "approve", secret="wrong").status_code == 403
+    assert _gate(c)["decision"] == "pending"
+
+
+def test_telegram_approve_allows(telegram_env):
+    c = TestClient(svc.app)
+    _gate(c)
+    telegram_env.clear()  # drop the sendMessage from _gate; watch the click's edits
+    assert _telegram_click(c, _token(), "approve").status_code == 200
+    assert _gate(c)["decision"] == "allow"
+    # The click clears the spinner and edits the card to remove the buttons.
+    methods = [m for m, _ in telegram_env]
+    assert methods == ["answerCallbackQuery", "editMessageText"]
+    assert telegram_env[1][1]["reply_markup"] == {"inline_keyboard": []}
+
+
+def test_telegram_deny_denies(telegram_env):
+    c = TestClient(svc.app)
+    _gate(c)
+    _telegram_click(c, _token(), "deny")
+    assert _gate(c)["decision"] == "denied"
+
+
+def test_telegram_expired_token_decides_nothing(telegram_env):
+    c = TestClient(svc.app)
+    _gate(c)
+    assert _telegram_click(c, "not-a-token", "approve").status_code == 200
+    assert _gate(c)["decision"] == "pending"
+
+
+def test_healthz_channel_follows_telegram(telegram_env, monkeypatch):
+    c = TestClient(svc.app)
+    h = c.get("/healthz").json()
+    assert h["provider"] == "telegram" and h["ok"] is True and h["channel"] == "configured"
+    monkeypatch.delenv("TELEGRAM_APPROVAL_WEBHOOK_SECRET")  # secret is part of "configured"
+    assert c.get("/healthz").json()["channel"] == "unconfigured"
+
+
 # --- the middleware, end-to-end against the real service app -------------------------
 
 
@@ -328,6 +432,27 @@ def test_middleware_gates_then_allows_after_card_approval(slack_ok, monkeypatch)
     assert "still awaiting" in still
     TestClient(svc.app).post(f"/approve/{_sole_token()}", data={"decision": "approve"})
     assert asyncio.run(mw.on_call_tool(_ctx(), _ran)) == "TOOL-RAN"
+
+
+def test_middleware_names_the_active_provider(telegram_env, monkeypatch):
+    # The gate hands back channel_label for the ACTIVE provider; the model-facing
+    # message must say "Telegram" (the live channel) and never list the others.
+    mw = _middleware_against_service(monkeypatch)
+    text = _pending_text(mw)
+    assert "Telegram approval channel" in text
+    assert "Slack" not in text and "Discord" not in text
+
+
+def test_middleware_widget_mode_prose_for_model_token_for_widget(slack_ok, monkeypatch):
+    # Widget mode: the model reads explicit prose (so it re-calls and doesn't claim
+    # premature success); the token for the card rides an HTML-comment marker.
+    mw = _middleware_against_service(monkeypatch, widget=True)
+    text = asyncio.run(mw.on_call_tool(_ctx(), _ran)).content[0].text
+    assert "was NOT performed" in text and "call this same tool again" in text
+    marker = re.search(r"<!--APPROVAL\s+(\{.*?\})\s*-->", text)
+    assert marker, "widget marker missing"
+    payload = json.loads(marker.group(1))
+    assert payload["token"] == _sole_token() and "send_message" in payload["action"]
 
 
 def test_middleware_messages_carry_no_link_or_directives(slack_ok, monkeypatch):

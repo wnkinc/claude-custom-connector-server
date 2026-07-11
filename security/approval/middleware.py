@@ -4,8 +4,9 @@ claude.ai gives us no reliable in-chat gate: tool-approval is sticky (approve on
 and it's approved across every chat; the connector "needs approval" setting stops
 applying), and MCP elicitation dialogs don't render for custom connectors (tested).
 So a gated tool short-circuits to a plain pending status, an Approve/Deny card is
-pushed to the operator's approval channel (Slack or Discord -- the sidecar's
-APPROVAL_PROVIDER), and the action runs ONLY after the human decides out-of-band.
+pushed to the operator's approval channel (Slack, Discord, or Telegram -- the
+sidecar's APPROVAL_PROVIDER), and the action runs ONLY after the human decides
+out-of-band.
 The model can't press the button or forge the server-side "approved" state, so
 this is a real gate.
 
@@ -40,6 +41,8 @@ import httpx
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools.tool import ToolResult
 
+from security.approval.gating import fetch_overrides, is_gated
+
 LOGGER = logging.getLogger("mcp_tools.approval")
 
 
@@ -73,6 +76,7 @@ class ApprovalMiddleware(Middleware):
         source: str = "mcp",
         approval_url: str | None = None,
         timeout: float = 10.0,
+        widget: bool = False,
     ) -> None:
         self._exempt = exempt or set()
         self.source = source
@@ -80,10 +84,18 @@ class ApprovalMiddleware(Middleware):
             approval_url or os.getenv("APPROVAL_URL", "http://127.0.0.1:8072")
         ).rstrip("/")
         self.timeout = timeout
+        # Widget mode: the in-chat approval widget IS the channel, so a pending result
+        # carries the capability token (harmless -- no tool flips the gate, the model
+        # can't fetch) as a JSON payload the widget reads; the tool is tagged elsewhere
+        # (WidgetMetaMiddleware) so this result renders the card. No out-of-band card needed.
+        self._widget = widget
 
     async def on_call_tool(self, context, call_next):  # type: ignore[no-untyped-def]
         tool_name = context.message.name
-        if tool_name in self._exempt:
+        # Baseline exempt + live sidecar overrides (the gatekeeper can flip a tool
+        # gated<->free at runtime). Override wins; a fetch blip keeps the last-known.
+        overrides = await fetch_overrides(self.source, self.approval_url)
+        if not is_gated(tool_name, self._exempt, overrides):
             return await call_next(context)
 
         args = dict(context.message.arguments or {})
@@ -113,30 +125,52 @@ class ApprovalMiddleware(Middleware):
             return await call_next(context)
         if decision == "denied":
             return _note(f"❌ The user denied `{action}`, so it was not performed.")
-        # Pending. `notified` reports whether the Slack card actually reached the
-        # human; default True so an older sidecar (no such field) isn't a false alarm.
+
+        # Widget mode: the model reads the SAME explicit prose as the non-widget path
+        # (that's what makes it reliably re-call after approval, per main), and the token
+        # for the in-chat card rides an HTML comment the model ignores and the widget
+        # parses. Do NOT swap this for a JSON blob -- terse JSON + a visible widget makes
+        # the model assume the card executes the action and claim premature success.
+        if self._widget:
+            marker = json.dumps({"token": data.get("token", ""), "action": action})
+            return _note(
+                f"⏸ Approval required — `{action}` was NOT performed and has NOT been sent. "
+                "An Approve/Deny card is shown in the chat. This action performs ONLY when "
+                "you call this same tool again with the same arguments AFTER the user "
+                "approves it in the card and tells you to continue; until then it stays "
+                "pending. Do NOT tell the user it was done until that second call succeeds.\n"
+                f"<!--APPROVAL {marker}-->"
+            )
+
+        # Pending. `notified` reports whether the card actually reached the human;
+        # default True so an older sidecar (no such field) isn't a false alarm.
+        # `channel_label` names the ACTIVE provider (e.g. "Telegram") so the message
+        # matches reality instead of listing platforms or guessing; the sidecar owns
+        # APPROVAL_PROVIDER, the tool doesn't, so it comes back on the gate response.
+        # Empty (older sidecar) => the generic phrasing, which still reads fine.
+        label = data.get("channel_label") or ""
+        where = f"{label} " if label else ""
         if not data.get("notified", True):
             return _note(
                 f"⚠️ `{action}` requires out-of-band human approval and was NOT "
-                "performed — and the approval request could not be delivered to the "
-                "approval channel (unconfigured or unreachable), so it cannot currently "
-                "be approved. The server operator needs to restore the approval channel "
-                "before this action can proceed."
+                f"performed — and the approval request could not be delivered to the "
+                f"{where}approval channel (unconfigured or unreachable), so it cannot "
+                "currently be approved. The server operator needs to restore the "
+                "approval channel before this action can proceed."
             )
         if not data.get("created"):
             return _note(
                 f"⏳ `{action}` is still awaiting human approval on the card in the "
-                "user's approval channel. Once approved there, calling the same tool "
-                "with the same arguments performs the action."
+                f"user's {where}approval channel. Once approved there, calling the same "
+                "tool with the same arguments performs the action."
             )
         return _note(
             f"⏸ Approval required — `{action}` was NOT performed.\n\n"
             "This server gates this tool behind out-of-band human approval: an "
-            "Approve/Deny card for this exact action has been posted to the user's "
-            "approval channel (Slack or Discord, per the server's setup). Once the "
-            "user approves it there, calling the same tool again with the same "
-            "arguments performs the action; until then it reports still-pending. "
-            "Denying it cancels the action."
+            f"Approve/Deny card for this exact action has been posted to the user's "
+            f"{where}approval channel. Once the user approves it there, calling the "
+            "same tool again with the same arguments performs the action; until then "
+            "it reports still-pending. Denying it cancels the action."
         )
 
 

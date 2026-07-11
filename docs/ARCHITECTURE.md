@@ -78,10 +78,11 @@ The same image runs locally (`docker compose up`) and in the cloud — transport
   pending-approval state can't live per-tool — the approval sidecar
   (`security/approval/service/`, `http://approval:8072` internally,
   `approval.<MCP_DOMAIN>` publicly) owns all tokens, the approve page, and the
-  provider webhooks (`APPROVAL_PROVIDER=slack|discord`; telegram planned). Tools
+  provider webhooks (`APPROVAL_PROVIDER=slack|discord|telegram`). Tools
   only create/query their own approvals; decisions are written solely by the human
-  channels (capability-URL page, Slack HMAC-signed webhook, or Discord
-  Ed25519-signed webhook), so a compromised tool can't approve itself — and the
+  channels (capability-URL page, Slack HMAC-signed webhook, Discord Ed25519-signed
+  webhook, or Telegram secret-token webhook), so a compromised tool can't approve
+  itself — and the
   provider bot token lives in exactly one container. The card is the only surface
   shown to the human: the model-facing pending message is a bare status with no URL,
   because a tool result asking the model to relay a link is indistinguishable from

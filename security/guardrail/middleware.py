@@ -72,14 +72,23 @@ class GuardrailMiddleware(Middleware):
         guardrail_url: str | None = None,
         source: str = "xmcp",
         timeout: float = 20.0,
+        exempt: set[str] | None = None,
     ) -> None:
         self.guardrail_url = (
             guardrail_url or os.getenv("GUARDRAIL_URL", "http://127.0.0.1:8071")
         ).rstrip("/")
         self.source = source
         self.timeout = timeout
+        # Trusted first-party tools on an untrusted-output server (e.g. a UI helper the
+        # server itself renders) return no external content -- screening them only mangles
+        # our own output (wrapping + nulled _meta). Names here bypass the screen.
+        self._exempt = exempt or set()
 
     async def on_call_tool(self, context, call_next):  # type: ignore[no-untyped-def]
+        # Exempt first-party helpers before the call: their output is ours, not untrusted.
+        if getattr(getattr(context, "message", None), "name", None) in self._exempt:
+            return await call_next(context)
+
         result = await call_next(context)
 
         # Disabled -> pass through unscreened (opt-out for local/no-service runs).

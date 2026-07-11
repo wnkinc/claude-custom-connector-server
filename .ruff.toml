@@ -21,6 +21,6 @@ select = [
 
 [lint.per-file-ignores]
 # Tests are built from asserts, dummy credentials, and 0.0.0.0 fixtures.
-"**/test_*.py" = ["S101", "S104", "S105", "S106"]
+"**/test_*.py" = ["S101", "S104", "S105", "S106", "S107"]
 # The engine launch: fixed argv (no shell), dotnet PATH-resolved in the container.
 "tools/lean/server.py" = ["S603", "S607"]

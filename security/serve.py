@@ -109,38 +109,62 @@ def serve(
     require_approval = _env_override("MCP_REQUIRE_APPROVAL", require_approval)
     untrusted_output = _env_override("MCP_UNTRUSTED_OUTPUT", untrusted_output)
 
+    # SPIKE (throwaway, SPIKE_APPROVAL_WIDGET=1): register the in-chat approval-widget
+    # probe. Runs BEFORE the middleware blocks so it can extend the exempt allowlists its
+    # helper tools rely on (MCP_APPROVAL_EXEMPT / MCP_GUARDRAIL_EXEMPT).
+    if _is_truthy(os.getenv("SPIKE_APPROVAL_WIDGET")):
+        from security.approval.widget_spike import register_widget_spike
+
+        register_widget_spike(mcp)
+
     if require_approval:
         # State + the human-facing pages live in the approval sidecar (APPROVAL_URL);
         # this middleware is only the per-tool client (source scopes its approvals).
         mcp.add_middleware(
-            ApprovalMiddleware(exempt=_csv_set(os.getenv(approval_exempt_env)), source=mcp.name)
+            ApprovalMiddleware(
+                exempt=_csv_set(os.getenv(approval_exempt_env)),
+                source=mcp.name,
+                widget=_is_truthy(os.getenv("SPIKE_APPROVAL_WIDGET")),
+            )
         )
         # Pre-declare the approval protocol in the server-level instructions (a
         # list-time, trusted channel) so a pending status arrives as expected
         # behavior. Runtime tool output that explains itself reads as prompt
         # injection -- to the model and to claude.ai's screening -- which is why the
         # pending message itself is a bare status (see approval/middleware.py).
+        # Provider-neutral on purpose: this note is baked in at server startup, but the
+        # active approval channel is the sidecar's APPROVAL_PROVIDER -- unknown here. The
+        # per-call pending message names the live channel (via the gate response), so this
+        # stays generic instead of naming a platform that might not be the one in use.
         note = (
             "Some tools on this server are gated behind out-of-band human approval: "
             "instead of running, a gated call reports a pending status and an "
             "Approve/Deny card for that exact action is posted to the user's approval "
-            "channel (Slack or Discord, per the server's setup). After the user "
-            "approves it there, calling the same tool again with the same arguments "
-            "performs the action; if they deny it, that call reports the denial. "
-            "Undecided requests expire after 10 minutes, and a later call posts a "
-            "fresh card."
+            "channel. After the user approves it there, calling the same tool again with "
+            "the same arguments performs the action; if they deny it, that call reports "
+            "the denial. Undecided requests expire after 10 minutes, and a later call "
+            "posts a fresh card."
         )
         mcp.instructions = f"{mcp.instructions}\n\n{note}" if mcp.instructions else note
     if untrusted_output:
-        mcp.add_middleware(GuardrailMiddleware(source=guardrail_source or mcp.name))
-        # The guardrail nulls each result's structuredContent (screening replaces it with
-        # text). A tool that still advertises an outputSchema then violates the MCP rule
-        # "outputSchema => conforming structuredContent", so the Claude connector rejects
-        # the call with an output-validation error. Strip schemas from these guardrailed
-        # tools. (Trusted tools keep their outputSchema -- they still return matching
-        # structuredContent, so it's valid and useful.) Escape hatch: MCP_KEEP_OUTPUT_SCHEMA=1.
-        if not _is_truthy(os.getenv("MCP_KEEP_OUTPUT_SCHEMA")):
-            _strip_local_output_schemas(mcp)
+        mcp.add_middleware(
+            GuardrailMiddleware(
+                source=guardrail_source or mcp.name,
+                exempt=_csv_set(os.getenv("MCP_GUARDRAIL_EXEMPT")),
+            )
+        )
+
+    # A tool that advertises an outputSchema must return conforming structuredContent on
+    # EVERY result (MCP rule). Two of our layers return a result WITHOUT it: the guardrail
+    # nulls structuredContent when screening, and a gated call short-circuits to a plain
+    # pending status. Either way an advertised schema makes the Claude connector reject the
+    # call with an output-validation error -- so strip local schemas whenever approval or
+    # guardrail is on. (Fully-trusted, ungated tools keep their schema.) Escape hatch:
+    # MCP_KEEP_OUTPUT_SCHEMA=1.
+    if (require_approval or untrusted_output) and not _is_truthy(
+        os.getenv("MCP_KEEP_OUTPUT_SCHEMA")
+    ):
+        _strip_local_output_schemas(mcp)
 
     auth = build_oauth_provider()
     if auth is not None:
