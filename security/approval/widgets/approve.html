@@ -6,7 +6,12 @@
 <style>
   /* Everything sits on TRANSPARENT backgrounds so the widget adopts the chat surface.
      All grays are semi-transparent so they read correctly on any host background;
-     only text colors switch with the theme. */
+     only text colors switch with the theme.
+     THEME SOURCE: the host's theme (hostContext.theme -> data-theme on <html>, set via
+     ExtApps.applyDocumentTheme) beats the OS prefers-color-scheme fallback. That helper
+     also sets an inline color-scheme matching the embedder -- REQUIRED for transparency:
+     Chromium paints an opaque canvas behind any iframe whose color-scheme differs from
+     the embedding page's, and claude.ai's theme toggle doesn't follow the OS. */
   :root {
     --ink:#1c1c1a; --ink-2:#5d5b55; --muted:#84827b;
     --border:rgba(0,0,0,0.13); --tint:rgba(0,0,0,0.045);
@@ -14,11 +19,15 @@
     --ok:#1a7f37; --no:#b3261e; --warn:#9a6700; color-scheme:light;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --ink:#ededeb; --ink-2:#b8b7af; --muted:#8d8c85;
+    :root:not([data-theme="light"]) { --ink:#ededeb; --ink-2:#b8b7af; --muted:#8d8c85;
       --border:rgba(255,255,255,0.16); --tint:rgba(255,255,255,0.06);
       --accent:#c96442; --accent-hover:#d97757; --accent-ink:#fffdfa;
       --ok:#5bb96a; --no:#e5645c; --warn:#d4a72c; color-scheme:dark; }
   }
+  :root[data-theme="dark"] { --ink:#ededeb; --ink-2:#b8b7af; --muted:#8d8c85;
+    --border:rgba(255,255,255,0.16); --tint:rgba(255,255,255,0.06);
+    --accent:#c96442; --accent-hover:#d97757; --accent-ink:#fffdfa;
+    --ok:#5bb96a; --no:#e5645c; --warn:#d4a72c; color-scheme:dark; }
   html,body{margin:0;background:transparent}
   /* Start with NO padding and the card hidden: a gated tool is tagged as a widget tool,
      so the host draws this iframe on EVERY call to it (incl. the approved re-run). We
@@ -89,8 +98,14 @@
 /*__EXT_APPS_BUNDLE__*/
 </script>
 <script type="module">
-const { App } = globalThis.ExtApps;
+const { App, applyDocumentTheme } = globalThis.ExtApps;
 const $ = (id) => document.getElementById(id);
+
+// Follow the HOST's theme, not the OS: sets data-theme + an inline color-scheme that
+// matches the embedder, which is what keeps the iframe backdrop transparent (see CSS).
+const applyTheme = (t) => {
+  if (t === "dark" || t === "light") { applyDocumentTheme(t); diag("theme: " + t); }
+};
 const PUBLIC_BASE = "__APPROVAL_PUBLIC_BASE__";  // baked in by the resource handler
 let ctx = null;
 
@@ -187,7 +202,9 @@ app.ontoolresult = (result) => {
 };
 $("approve").addEventListener("click", () => decide("approve"));
 $("deny").addEventListener("click", () => decide("deny"));
+app.onhostcontextchanged = (c) => applyTheme(c?.theme);
 await app.connect();
+applyTheme(app.getHostContext()?.theme);
 diag("connected");
 </script>
 </body>
