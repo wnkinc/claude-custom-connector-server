@@ -10,13 +10,13 @@
   :root {
     --ink:#1c1c1a; --ink-2:#5d5b55; --muted:#84827b;
     --border:rgba(0,0,0,0.13); --tint:rgba(0,0,0,0.045);
-    --btn:#1f1e1c; --btn-ink:#fbfbfa;
+    --accent:#c96442; --accent-hover:#b5573a; --accent-ink:#fffdfa;
     --ok:#1a7f37; --no:#b3261e; --warn:#9a6700; color-scheme:light;
   }
   @media (prefers-color-scheme: dark) {
     :root { --ink:#ededeb; --ink-2:#b8b7af; --muted:#8d8c85;
       --border:rgba(255,255,255,0.16); --tint:rgba(255,255,255,0.06);
-      --btn:#ededeb; --btn-ink:#1c1c1a;
+      --accent:#c96442; --accent-hover:#d97757; --accent-ink:#fffdfa;
       --ok:#5bb96a; --no:#e5645c; --warn:#d4a72c; color-scheme:dark; }
   }
   html,body{margin:0;background:transparent}
@@ -30,14 +30,16 @@
   .action{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:var(--ink-2);
     background:var(--tint);border-radius:8px;padding:9px 11px;word-break:break-word}
   .btns{display:flex;gap:8px;margin-top:12px}
-  button{flex:1;font:inherit;font-weight:600;padding:8px 12px;border-radius:8px;border:1px solid transparent;
-    cursor:pointer;transition:opacity .1s,background .1s}
+  button{flex:1;font:inherit;font-weight:500;padding:8px 12px;border-radius:8px;border:0;
+    cursor:pointer;transition:background .1s}
   button:disabled{opacity:.45;cursor:default}
-  .approve{background:var(--btn);color:var(--btn-ink)}
-  .approve:hover:enabled{opacity:.85}
-  .deny{background:transparent;color:var(--ink-2);border-color:var(--border)}
-  .deny:hover:enabled{background:var(--tint)}
-  button:active:enabled{opacity:.7}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  /* filled primary (affirmative, right) + quiet tonal secondary (dismissive, left) */
+  .approve{background:var(--accent);color:var(--accent-ink);font-weight:600}
+  .approve:hover:enabled{background:var(--accent-hover)}
+  .deny{background:var(--tint);color:var(--ink-2)}
+  .deny:hover:enabled{background:var(--border)}
+  button:active:enabled{opacity:.8}
   .inline-err{margin-top:10px;font-size:12px;color:var(--no)}
   /* decided panel */
   .result{padding:14px 16px;border-top:1px solid var(--border)}
@@ -69,8 +71,8 @@
     <div class="head">Approval requested</div>
     <div class="action" id="action">…</div>
     <div class="btns">
-      <button class="approve" id="approve" type="button">Approve</button>
       <button class="deny" id="deny" type="button">Deny</button>
+      <button class="approve" id="approve" type="button">Approve</button>
     </div>
     <div class="inline-err" id="inlineErr" hidden></div>
   </div>
