@@ -613,6 +613,27 @@ async def telegram_interact(request):  # type: ignore[no-untyped-def]
     return Response(status_code=200)
 
 
+# ---------------------------------------------------------------------------
+# Gating config: per-(source, tool) approval OVERRIDES, editable at runtime (by the
+# gatekeeper tool) so a tool can be flipped gated<->free WITHOUT a restart. The tool
+# servers read this live (cached) and combine it with their baseline exempt list; the
+# override wins. In-memory only: a restart re-seeds from each server's baseline, which
+# is the safe default (writes gated). Writers are the gatekeeper's set_gating tool --
+# itself gated -- so flipping a gate requires a human approval.
+_GATING: dict[str, dict[str, bool]] = {}  # source -> {tool: requires_approval}
+
+
+async def gating(request):  # type: ignore[no-untyped-def]
+    if request.method == "GET":
+        source = request.query_params.get("source", "")
+        return JSONResponse({"source": source, "overrides": _GATING.get(source, {})})
+    body = await request.json()
+    source, tool = body["source"], body["tool"]
+    _GATING.setdefault(source, {})[tool] = bool(body["requires_approval"])
+    log.info("gating override: %s/%s requires_approval=%s", source, tool, body["requires_approval"])
+    return JSONResponse({"ok": True, "source": source, "overrides": _GATING[source]})
+
+
 async def healthz(request):  # type: ignore[no-untyped-def]
     provider = _provider()
     return JSONResponse(
@@ -633,6 +654,7 @@ app = Starlette(
         Route("/slack/interact", slack_interact, methods=["POST"]),
         Route("/discord/interact", discord_interact, methods=["POST"]),
         Route("/telegram/interact", telegram_interact, methods=["POST"]),
+        Route("/gating", gating, methods=["GET", "POST"]),
         Route("/healthz", healthz, methods=["GET"]),
     ]
 )

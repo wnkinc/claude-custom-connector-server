@@ -41,6 +41,8 @@ import httpx
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools.tool import ToolResult
 
+from security.approval.gating import fetch_overrides, is_gated
+
 LOGGER = logging.getLogger("mcp_tools.approval")
 
 
@@ -90,7 +92,10 @@ class ApprovalMiddleware(Middleware):
 
     async def on_call_tool(self, context, call_next):  # type: ignore[no-untyped-def]
         tool_name = context.message.name
-        if tool_name in self._exempt:
+        # Baseline exempt + live sidecar overrides (the gatekeeper can flip a tool
+        # gated<->free at runtime). Override wins; a fetch blip keeps the last-known.
+        overrides = await fetch_overrides(self.source, self.approval_url)
+        if not is_gated(tool_name, self._exempt, overrides):
             return await call_next(context)
 
         args = dict(context.message.arguments or {})

@@ -266,6 +266,31 @@ services:
       egress:
         condition: service_started
 
+  gatekeeper:
+    build:
+      context: .
+      dockerfile: tools/gatekeeper/Dockerfile
+    image: mcp-gatekeeper
+    profiles: ["gatekeeper"]   # opt-in: runs only when listed in COMPOSE_PROFILES (root .env)
+    restart: unless-stopped
+    env_file:
+      - path: tools/gatekeeper/.env
+        required: false
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_TRANSPORT: http
+      MCP_AUTH_ENABLED: "0"
+      HTTPS_PROXY: http://egress:3134
+      HTTP_PROXY: http://egress:3134
+      NO_PROXY: localhost,127.0.0.1
+    volumes:
+      - gatekeeper-state:/app/state
+    networks:
+      - internal
+    depends_on:
+      egress:
+        condition: service_started
+
 networks:
   # No gateway to the host/internet: containers here reach only each other + any peer
   # that also has an `edge` leg (the egress proxy). This is the wall.
@@ -274,6 +299,7 @@ networks:
   edge: {}
 
 volumes:
+  gatekeeper-state:
   telegram-state:
   lean-state:
   guardrail-hf-cache:

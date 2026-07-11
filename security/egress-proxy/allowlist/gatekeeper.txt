@@ -1,0 +1,4 @@
+# gatekeeper egress allowlist (squid dstdomain). One host per line; leading dot = subdomains.
+# Add ONLY hosts this tool must reach (plus the Google OAuth hosts if it serves Claude:
+# accounts.google.com, oauth2.googleapis.com, www.googleapis.com). Discover misses from
+# squid TCP_DENIED in the egress log (docker compose exec egress tail /var/log/squid/access.log).

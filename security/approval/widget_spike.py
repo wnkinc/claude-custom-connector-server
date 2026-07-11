@@ -26,6 +26,8 @@ from pathlib import Path
 
 from fastmcp.server.middleware import Middleware
 
+from security.approval.gating import fetch_overrides, is_gated
+
 _WIDGETS = Path(__file__).resolve().parent / "widgets"
 _html_cache: str | None = None
 
@@ -71,16 +73,21 @@ class WidgetMetaMiddleware(Middleware):
     place that decides which tools show the card -- driven by the same exempt list that
     already decides which tools need approval. No per-tool code."""
 
-    def __init__(self, uri: str) -> None:
+    def __init__(self, uri: str, source: str, approval_url: str) -> None:
         self._uri = uri
+        self._source = source
+        self._approval_url = approval_url
 
     async def on_list_tools(self, context, call_next):  # type: ignore[no-untyped-def]
         tools = await call_next(context)
-        exempt = _approval_exempt()  # read live: the gated set == everything not exempt
+        # Same gated decision the ApprovalMiddleware uses (baseline exempt + live
+        # sidecar overrides), so the card and the gate always agree on a tool.
+        baseline = _approval_exempt()
+        overrides = await fetch_overrides(self._source, self._approval_url)
         meta = {"ui": {"resourceUri": self._uri}, "ui/resourceUri": self._uri}
         out = []
         for t in tools:
-            if t.name not in exempt:
+            if is_gated(t.name, baseline, overrides):
                 merged = {**(getattr(t, "meta", None) or {}), **meta}
                 # Best-effort tag; if the Tool isn't a copyable pydantic model, leave it.
                 with contextlib.suppress(Exception):
@@ -113,6 +120,7 @@ def register_widget_spike(mcp) -> None:  # type: ignore[no-untyped-def]
 
     mcp.tool(name="approval_probe")(approval_probe)
 
-    # THE one shared piece: tag the GATED (non-exempt) tools so their pending result
-    # renders the approval card -- driven by the same exempt list that decides approval.
-    mcp.add_middleware(WidgetMetaMiddleware(uri=uri))
+    # THE one shared piece: tag the GATED tools so their pending result renders the
+    # approval card -- same gated decision (baseline + live overrides) the gate uses.
+    approval_url = os.getenv("APPROVAL_URL", "http://127.0.0.1:8072")
+    mcp.add_middleware(WidgetMetaMiddleware(uri=uri, source=mcp.name, approval_url=approval_url))
