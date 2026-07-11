@@ -103,8 +103,15 @@ const $ = (id) => document.getElementById(id);
 
 // Follow the HOST's theme, not the OS: sets data-theme + an inline color-scheme that
 // matches the embedder, which is what keeps the iframe backdrop transparent (see CSS).
+// Idempotent: the host reports the theme twice at startup (our getHostContext() read
+// plus its initial host-context-changed notification) -- only act on a change.
+let curTheme = null;
 const applyTheme = (t) => {
-  if (t === "dark" || t === "light") { applyDocumentTheme(t); diag("theme: " + t); }
+  if ((t === "dark" || t === "light") && t !== curTheme) {
+    curTheme = t;
+    applyDocumentTheme(t);
+    diag("theme: " + t);
+  }
 };
 const PUBLIC_BASE = "__APPROVAL_PUBLIC_BASE__";  // baked in by the resource handler
 let ctx = null;
