@@ -41,7 +41,7 @@ import httpx
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools.tool import ToolResult
 
-from security.approval.gating import fetch_overrides, is_gated
+from security.approval.gating import fetch_overrides, mode_for
 
 LOGGER = logging.getLogger("mcp_tools.approval")
 
@@ -90,13 +90,30 @@ class ApprovalMiddleware(Middleware):
         # (WidgetMetaMiddleware) so this result renders the card. No out-of-band card needed.
         self._widget = widget
 
+    async def on_list_tools(self, context, call_next):  # type: ignore[no-untyped-def]
+        # Hidden tools are filtered from the advertised list. The connector caches
+        # tools/list until refreshed, so this is cosmetic latency-wise -- the
+        # call-time refusal below is the actual gate.
+        tools = await call_next(context)
+        overrides = await fetch_overrides(self.source, self.approval_url)
+        return [t for t in tools if mode_for(t.name, self._exempt, overrides) != "hidden"]
+
     async def on_call_tool(self, context, call_next):  # type: ignore[no-untyped-def]
         tool_name = context.message.name
         # Baseline exempt + live sidecar overrides (the gatekeeper can flip a tool
-        # gated<->free at runtime). Override wins; a fetch blip keeps the last-known.
+        # free/gated/hidden at runtime). Override wins; a fetch blip keeps the last-known.
         overrides = await fetch_overrides(self.source, self.approval_url)
-        if not is_gated(tool_name, self._exempt, overrides):
+        mode = mode_for(tool_name, self._exempt, overrides)
+        if mode == "free":
             return await call_next(context)
+        if mode == "hidden":
+            # Disabled outright: no approval path, and a stale client tool list must
+            # not be able to run it. Same wording rules as pending: bare facts only.
+            return _note(
+                f"⛔ `{tool_name}` has been disabled by the server operator, so this "
+                "call was not performed. It cannot be approved; the operator would "
+                "have to re-enable the tool first."
+            )
 
         args = dict(context.message.arguments or {})
         action = _describe_call(tool_name, args)

@@ -26,7 +26,7 @@ from pathlib import Path
 
 from fastmcp.server.middleware import Middleware
 
-from security.approval.gating import fetch_overrides, is_gated
+from security.approval.gating import fetch_overrides, mode_for
 
 _WIDGETS = Path(__file__).resolve().parent / "widgets"
 _html_cache: str | None = None
@@ -89,7 +89,9 @@ class WidgetMetaMiddleware(Middleware):
         meta = {"ui": {"resourceUri": self._uri}, "ui/resourceUri": self._uri}
         out = []
         for t in tools:
-            if is_gated(t.name, baseline, overrides):
+            # Only "gated" gets the card; "hidden" tools were already filtered out by
+            # the (inner) ApprovalMiddleware's on_list_tools before this runs.
+            if mode_for(t.name, baseline, overrides) == "gated":
                 merged = {**(getattr(t, "meta", None) or {}), **meta}
                 # Best-effort tag; if the Tool isn't a copyable pydantic model, leave it.
                 with contextlib.suppress(Exception):

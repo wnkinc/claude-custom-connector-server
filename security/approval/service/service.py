@@ -614,13 +614,16 @@ async def telegram_interact(request):  # type: ignore[no-untyped-def]
 
 
 # ---------------------------------------------------------------------------
-# Gating config: per-(source, tool) approval OVERRIDES, editable at runtime (by the
-# gatekeeper tool) so a tool can be flipped gated<->free WITHOUT a restart. The tool
-# servers read this live (cached) and combine it with their baseline exempt list; the
-# override wins. In-memory only: a restart re-seeds from each server's baseline, which
-# is the safe default (writes gated). Writers are the gatekeeper's set_gating tool --
-# itself gated -- so flipping a gate requires a human approval.
-_GATING: dict[str, dict[str, bool]] = {}  # source -> {tool: requires_approval}
+# Gating config: per-(source, tool) MODE overrides ("free" | "gated" | "hidden"),
+# editable at runtime (by the gatekeeper tool) so a tool can be flipped WITHOUT a
+# restart. The tool servers read this live (cached) and combine it with their baseline
+# exempt list; the override wins. "hidden" = the server refuses the call outright and
+# filters the tool from tools/list. In-memory only: a restart re-seeds from each
+# server's baseline, which is the safe default (writes gated). Writers are the
+# gatekeeper's set_gating tool -- itself gated -- so flipping a gate requires a human
+# approval.
+_GATING: dict[str, dict[str, str]] = {}  # source -> {tool: mode}
+_GATING_MODES = {"free", "gated", "hidden"}
 
 
 async def gating(request):  # type: ignore[no-untyped-def]
@@ -629,8 +632,16 @@ async def gating(request):  # type: ignore[no-untyped-def]
         return JSONResponse({"source": source, "overrides": _GATING.get(source, {})})
     body = await request.json()
     source, tool = body["source"], body["tool"]
-    _GATING.setdefault(source, {})[tool] = bool(body["requires_approval"])
-    log.info("gating override: %s/%s requires_approval=%s", source, tool, body["requires_approval"])
+    mode = body.get("mode")
+    if mode is None and "requires_approval" in body:  # pre-tri-state gatekeeper client
+        mode = "gated" if body["requires_approval"] else "free"
+    if mode not in _GATING_MODES:
+        return JSONResponse(
+            {"ok": False, "error": f"mode must be one of {sorted(_GATING_MODES)}"},
+            status_code=400,
+        )
+    _GATING.setdefault(source, {})[tool] = mode
+    log.info("gating override: %s/%s mode=%s", source, tool, mode)
     return JSONResponse({"ok": True, "source": source, "overrides": _GATING[source]})
 
 

@@ -27,6 +27,7 @@ _SPEC = importlib.util.spec_from_file_location(
 svc = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(svc)
 
+from security.approval import gating as gating_mod  # noqa: E402
 from security.approval.middleware import ApprovalMiddleware  # noqa: E402
 
 PUBLIC = "https://approval.example.com"
@@ -35,6 +36,8 @@ PUBLIC = "https://approval.example.com"
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
     svc._PENDING.clear()
+    svc._GATING.clear()
+    gating_mod._cache.clear()  # the TTL cache must not leak overrides across tests
     monkeypatch.setenv("APPROVAL_PUBLIC_URL", PUBLIC)
     # Slack off by default: gate still creates approvals but reports notified=False
     # (Slack is the only human channel now -- the chat never gets a link).
@@ -408,7 +411,10 @@ def _middleware_against_service(monkeypatch, **kwargs):
         kw.pop("timeout", None)
         return real_client(transport=httpx.ASGITransport(app=svc.app), **kw)
 
+    # Both the middleware's own calls (/gate) and the gating module's override
+    # fetches (/gating) must reach the in-process service.
     monkeypatch.setattr(mwmod.httpx, "AsyncClient", asgi_client)
+    monkeypatch.setattr(gating_mod.httpx, "AsyncClient", asgi_client)
     return mw
 
 
@@ -495,3 +501,81 @@ def test_middleware_fails_closed_when_service_unreachable():
     mw = ApprovalMiddleware(approval_url="http://127.0.0.1:9", source="t", timeout=0.5)
     out = asyncio.run(mw.on_call_tool(_ctx(), _ran))
     assert "failing CLOSED" in out.content[0].text and "NOT performed" in out.content[0].text
+
+
+# --- gating overrides: the free/gated/hidden tri-state --------------------------------
+
+
+def _set_mode(client, tool, mode, source="teltool"):
+    return client.post("/gating", json={"source": source, "tool": tool, "mode": mode})
+
+
+def test_gating_stores_and_returns_modes():
+    c = TestClient(svc.app)
+    for tool, mode in [("a", "free"), ("b", "gated"), ("c", "hidden")]:
+        assert _set_mode(c, tool, mode).json()["ok"] is True
+    got = c.get("/gating", params={"source": "teltool"}).json()
+    assert got["overrides"] == {"a": "free", "b": "gated", "c": "hidden"}
+    # Scoped per source: another source sees nothing.
+    assert c.get("/gating", params={"source": "other"}).json()["overrides"] == {}
+
+
+def test_gating_rejects_unknown_mode():
+    c = TestClient(svc.app)
+    assert _set_mode(c, "a", "sideways").status_code == 400
+    assert c.get("/gating", params={"source": "teltool"}).json()["overrides"] == {}
+
+
+def test_gating_accepts_legacy_requires_approval_bool():
+    # A pre-tri-state gatekeeper posts requires_approval; it must map onto modes.
+    c = TestClient(svc.app)
+    c.post("/gating", json={"source": "teltool", "tool": "a", "requires_approval": True})
+    c.post("/gating", json={"source": "teltool", "tool": "b", "requires_approval": False})
+    got = c.get("/gating", params={"source": "teltool"}).json()["overrides"]
+    assert got == {"a": "gated", "b": "free"}
+
+
+def test_mode_for_override_beats_baseline():
+    exempt = {"reader"}
+    assert gating_mod.mode_for("reader", exempt, {}) == "free"
+    assert gating_mod.mode_for("writer", exempt, {}) == "gated"
+    assert gating_mod.mode_for("reader", exempt, {"reader": "hidden"}) == "hidden"
+    assert gating_mod.mode_for("writer", exempt, {"writer": "free"}) == "free"
+
+
+def test_fetch_overrides_normalizes_legacy_bools(monkeypatch):
+    # An old sidecar may still hold bool values; anything unknown must fail SAFE (gated).
+    svc._GATING["teltool"] = {"a": True, "b": False, "c": "hidden", "d": "bogus"}
+    _middleware_against_service(monkeypatch)  # patches gating's client onto svc.app
+    got = asyncio.run(gating_mod.fetch_overrides("teltool", "http://approval.test"))
+    assert got == {"a": "gated", "b": "free", "c": "hidden", "d": "gated"}
+
+
+def test_middleware_free_override_runs_without_approval(monkeypatch):
+    mw = _middleware_against_service(monkeypatch)
+    _set_mode(TestClient(svc.app), "send_message", "free")
+    assert asyncio.run(mw.on_call_tool(_ctx(), _ran)) == "TOOL-RAN"
+    assert svc._PENDING == {}  # no approval was ever created
+
+
+def test_middleware_hidden_tool_refuses_without_approval_path(monkeypatch):
+    # Hidden = disabled outright: a stale client tool list must not be able to run
+    # it, and no approval is created (there is nothing to approve).
+    mw = _middleware_against_service(monkeypatch)
+    _set_mode(TestClient(svc.app), "send_message", "hidden")
+    text = asyncio.run(mw.on_call_tool(_ctx(), _ran)).content[0].text
+    assert "disabled" in text and "not performed" in text
+    assert "http" not in text  # same no-link/no-directive rule as pending messages
+    assert svc._PENDING == {}
+
+
+def test_middleware_list_filters_hidden_tools(monkeypatch):
+    mw = _middleware_against_service(monkeypatch)
+    _set_mode(TestClient(svc.app), "send_message", "hidden")
+    listed = [SimpleNamespace(name="send_message"), SimpleNamespace(name="get_me")]
+
+    async def _list(_ctx):
+        return listed
+
+    out = asyncio.run(mw.on_list_tools(None, _list))
+    assert [t.name for t in out] == ["get_me"]
