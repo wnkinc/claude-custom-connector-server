@@ -739,3 +739,87 @@ def test_manage_preflight_is_answered():
     assert r.status_code == 204
     assert r.headers["access-control-allow-methods"] == "GET, POST, OPTIONS"
     assert r.headers["access-control-allow-headers"] == "content-type"
+
+
+# --- the gatekeeper manage_tools wrapper (server side of the widget) ------------------
+
+import security.approval.manage_widget as mgmt  # noqa: E402
+
+
+class _FakeMCP:
+    """Minimal stand-in exposing only what register_manage_widget touches, so the
+    decorated manage_tools closure and the resource registration are captured for
+    direct testing -- no FastMCP internals, no browser."""
+
+    name = "gatekeeper"
+
+    def __init__(self):
+        self.resources = {}  # uri -> handler
+        self.tools = {}  # name -> async fn
+        self.tool_meta = None
+
+    def resource(self, uri, **kwargs):
+        def deco(fn):
+            self.resources[uri] = fn
+            return fn
+
+        return deco
+
+    def tool(self, *args, **kwargs):
+        self.tool_meta = kwargs.get("meta")
+
+        def deco(fn):
+            self.tools[fn.__name__] = fn
+            return fn
+
+        return deco
+
+
+def _register_manage(monkeypatch, working=True):
+    monkeypatch.setenv("APPROVAL_URL", "http://approval.test")
+    fake = _FakeMCP()
+    mgmt.register_manage_widget(fake)
+    if working:
+        real = httpx.AsyncClient
+
+        def asgi(**kw):
+            kw.pop("timeout", None)
+            return real(transport=httpx.ASGITransport(app=svc.app), **kw)
+
+        monkeypatch.setattr(mgmt.httpx, "AsyncClient", asgi)
+    else:
+
+        def boom(**kw):
+            raise RuntimeError("sidecar unreachable")
+
+        monkeypatch.setattr(mgmt.httpx, "AsyncClient", boom)
+    return fake
+
+
+def test_manage_tools_returns_a_redeemable_marker(monkeypatch):
+    fake = _register_manage(monkeypatch)
+    text = asyncio.run(fake.tools["manage_tools"]())
+    marker = re.search(r"<!--MANAGE\s+(\{.*?\})\s*-->", text)
+    assert marker, "manage_tools must emit the widget marker"
+    token = json.loads(marker.group(1))["token"]
+    # The token it minted actually works against the sidecar the widget will call.
+    assert TestClient(svc.app).get(f"/manage/{token}").json()["ok"] is True
+    # No approval-shaped directives/links leak into the model-facing prose.
+    assert "http" not in text
+
+
+def test_manage_tools_fails_soft_when_sidecar_down(monkeypatch):
+    fake = _register_manage(monkeypatch, working=False)
+    text = asyncio.run(fake.tools["manage_tools"]())
+    assert "could not be opened" in text and "Nothing was changed" in text
+    assert "<!--MANAGE" not in text  # no token, no card to render
+
+
+def test_register_manage_widget_wires_the_ui_resource(monkeypatch):
+    fake = _register_manage(monkeypatch)
+    # The tool is tagged with the ui:// resource so the host renders the panel,
+    # and that exact resource is registered (served HTML, not a dangling URI).
+    uri = fake.tool_meta["ui"]["resourceUri"]
+    assert uri.startswith("ui://manage.gatekeeper.")
+    assert uri in fake.resources
+    assert "Tool permissions" in fake.resources[uri]()  # the widget HTML
