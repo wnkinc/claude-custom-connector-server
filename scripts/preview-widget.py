@@ -17,22 +17,41 @@ from pathlib import Path
 
 WIDGETS = Path(__file__).resolve().parents[1] / "security" / "approval" / "widgets"
 
-# A representative catalog: every group, plus a pinned tool to preview that state.
+# Representative data: several connectors, every group, plus a pinned tool.
 CATALOG = {
     "ok": True,
-    "source": "telegram",
-    "pinned": ["set_gating"],
-    "tools": {
-        "get_me": {"description": "", "read_only": True, "mode": "always_allow"},
-        "get_chats": {"description": "", "read_only": True, "mode": "always_allow"},
-        "list_contacts": {"description": "", "read_only": True, "mode": "always_allow"},
-        "search_messages": {"description": "", "read_only": True, "mode": "needs_approval"},
-        "send_message": {"description": "", "read_only": False, "mode": "needs_approval"},
-        "delete_message": {"description": "", "read_only": False, "mode": "blocked"},
-        "create_group": {"description": "", "read_only": False, "mode": "always_allow"},
-        "edit_message": {"description": "", "read_only": False, "mode": "always_allow"},
-        "set_gating": {"description": "", "read_only": False, "mode": "needs_approval"},
-        "approval_probe": {"description": "", "read_only": None, "mode": "always_allow"},
+    "sources": {
+        "telegram": {
+            "pinned": [],
+            "tools": {
+                "get_me": {"description": "", "read_only": True, "mode": "always_allow"},
+                "get_chats": {"description": "", "read_only": True, "mode": "always_allow"},
+                "list_contacts": {"description": "", "read_only": True, "mode": "always_allow"},
+                "search_messages": {"description": "", "read_only": True, "mode": "needs_approval"},
+                "send_message": {"description": "", "read_only": False, "mode": "needs_approval"},
+                "delete_message": {"description": "", "read_only": False, "mode": "blocked"},
+                "create_group": {"description": "", "read_only": False, "mode": "always_allow"},
+                "edit_message": {"description": "", "read_only": False, "mode": "always_allow"},
+                "approval_probe": {"description": "", "read_only": None, "mode": "always_allow"},
+            },
+        },
+        "xmcp": {
+            "pinned": [],
+            "tools": {
+                "searchPostsRecent": {"description": "", "read_only": True, "mode": "always_allow"},
+                "getUserByUsername": {"description": "", "read_only": True, "mode": "always_allow"},
+                "createPost": {"description": "", "read_only": False, "mode": "needs_approval"},
+                "deleteTweetById": {"description": "", "read_only": False, "mode": "blocked"},
+            },
+        },
+        "gatekeeper": {
+            "pinned": ["set_gating"],
+            "tools": {
+                "list_gating": {"description": "", "read_only": None, "mode": "always_allow"},
+                "manage_tools": {"description": "", "read_only": None, "mode": "always_allow"},
+                "set_gating": {"description": "", "read_only": None, "mode": "needs_approval"},
+            },
+        },
     },
 }
 
@@ -57,11 +76,16 @@ window.fetch = async (url, opts = {}) => {
   if (!String(url).includes("/manage/")) return REAL_FETCH(url, opts);
   if ((opts.method || "GET") === "POST") {
     const changes = JSON.parse(opts.body).changes;
-    const refused = Object.keys(changes).filter((t) => window.__CATALOG.pinned.includes(t));
-    for (const [t, m] of Object.entries(changes)) {
-      if (!refused.includes(t)) window.__CATALOG.tools[t].mode = m;
+    const refused = {};
+    let applied = 0;
+    for (const [src, tools] of Object.entries(changes)) {
+      const info = window.__CATALOG.sources[src];
+      for (const [t, m] of Object.entries(tools)) {
+        if (info.pinned.includes(t)) (refused[src] ??= []).push(t);
+        else { info.tools[t].mode = m; applied += 1; }
+      }
     }
-    return new Response(JSON.stringify({ ok: true, applied: Object.keys(changes).length - refused.length, refused, modes: {} }), { status: 200 });
+    return new Response(JSON.stringify({ ok: true, applied, refused }), { status: 200 });
   }
   return new Response(JSON.stringify(window.__CATALOG), { status: 200 });
 };
@@ -70,7 +94,7 @@ window.fetch = async (url, opts = {}) => {
 
 def bake() -> bytes:
     html = (WIDGETS / "manage.html").read_text()
-    marker = json.dumps({"token": "preview", "source": "telegram"})
+    marker = json.dumps({"token": "preview"})
     boot = (
         f"{STUB}\nwindow.__CATALOG = {json.dumps(CATALOG)};\n"
         f"window.__TOOLRESULT = {{ content: [{{ text: `<!--MANAGE {marker}-->` }}] }};"

@@ -647,11 +647,11 @@ def test_middleware_list_survives_a_down_sidecar():
 # --- manage sessions: the permissions widget's capability API -------------------------
 
 
-def _mint(client, source="teltool"):
-    return client.post("/manage", json={"source": source}).json()["token"]
+def _mint(client):
+    return client.post("/manage", json={}).json()["token"]
 
 
-def test_manage_session_serves_catalog_modes_and_cors():
+def test_manage_session_serves_every_registered_connector():
     c = TestClient(svc.app)
     c.post(
         "/catalog",
@@ -663,18 +663,22 @@ def test_manage_session_serves_catalog_modes_and_cors():
             ],
         },
     )
+    c.post("/catalog", json={"source": "gatekeeper", "tools": [{"name": "set_gating"}]})
     _set_mode(c, "send_message", "blocked")
     r = c.get(f"/manage/{_mint(c)}")
     # The widget iframe reads this cross-origin: CORS must be open (token = credential).
     assert r.headers["access-control-allow-origin"] == "*"
-    data = r.json()
-    assert data["tools"]["send_message"] == {
+    sources = r.json()["sources"]
+    assert sources["teltool"]["tools"]["send_message"] == {
         "description": "d",
         "read_only": False,
         "mode": "blocked",
     }
-    assert data["tools"]["get_me"]["mode"] == "always_allow"
-    assert data["pinned"] == []
+    assert sources["teltool"]["tools"]["get_me"]["mode"] == "always_allow"
+    assert sources["teltool"]["pinned"] == []
+    # The gatekeeper is a connector like any other, with its code pin surfaced.
+    assert sources["gatekeeper"]["pinned"] == ["set_gating"]
+    assert sources["gatekeeper"]["tools"]["set_gating"]["mode"] == "needs_approval"
 
 
 def test_manage_save_applies_persists_and_allows_resave(tmp_path, monkeypatch):
@@ -683,31 +687,43 @@ def test_manage_save_applies_persists_and_allows_resave(tmp_path, monkeypatch):
     token = _mint(c)
     r = c.post(
         f"/manage/{token}",
-        json={"changes": {"send_message": "blocked", "get_me": "needs_approval"}},
+        json={
+            "changes": {
+                "teltool": {"send_message": "blocked"},
+                "othertool": {"get_me": "needs_approval"},
+            }
+        },
     ).json()
-    assert r["applied"] == 2 and r["refused"] == []
+    assert r["applied"] == 2 and r["refused"] == {}
     # A widget save is a first-class choice: enforced via /gating and restart-proof.
     svc._STATE.clear()
     svc._load_state()
     assert c.get("/gating", params={"source": "teltool"}).json()["modes"] == {
-        "send_message": "blocked",
-        "get_me": "needs_approval",
+        "send_message": "blocked"
+    }
+    assert c.get("/gating", params={"source": "othertool"}).json()["modes"] == {
+        "get_me": "needs_approval"
     }
     # The same session token allows further saves while alive.
-    again = c.post(f"/manage/{token}", json={"changes": {"send_message": "always_allow"}}).json()
-    assert again["ok"] is True and again["modes"]["send_message"] == "always_allow"
+    again = c.post(
+        f"/manage/{token}", json={"changes": {"teltool": {"send_message": "always_allow"}}}
+    ).json()
+    assert again["ok"] is True and again["applied"] == 1
 
 
 def test_manage_save_respects_pins_and_validates_modes():
     c = TestClient(svc.app)
     r = c.post(
-        f"/manage/{_mint(c, source='gatekeeper')}",
-        json={"changes": {"set_gating": "always_allow"}},
+        f"/manage/{_mint(c)}",
+        json={"changes": {"gatekeeper": {"set_gating": "always_allow"}}},
     ).json()
     # The widget cannot unpin set_gating any more than the tool can.
-    assert r["applied"] == 0 and r["refused"] == ["set_gating"]
-    assert r["modes"]["set_gating"] == "needs_approval"
-    assert c.post(f"/manage/{_mint(c)}", json={"changes": {"a": "sideways"}}).status_code == 400
+    assert r["applied"] == 0 and r["refused"] == {"gatekeeper": ["set_gating"]}
+    assert c.get("/gating", params={"source": "gatekeeper"}).json()["modes"] == {
+        "set_gating": "needs_approval"
+    }
+    bad = c.post(f"/manage/{_mint(c)}", json={"changes": {"teltool": {"a": "sideways"}}})
+    assert bad.status_code == 400
 
 
 def test_manage_token_expires_and_unknown_is_404():

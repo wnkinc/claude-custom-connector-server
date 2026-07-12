@@ -743,10 +743,11 @@ def _prune_manage() -> None:
 
 
 async def manage_mint(request):  # type: ignore[no-untyped-def]
-    body = await request.json()
     _prune_manage()
     token = secrets.token_urlsafe(24)
-    _MANAGE[token] = {"source": body["source"], "created": time.time()}
+    # A session spans EVERY registered connector (the widget shows one section per
+    # source), so the record carries no source.
+    _MANAGE[token] = {"created": time.time()}
     return JSONResponse({"ok": True, "token": token})
 
 
@@ -754,44 +755,56 @@ async def manage_session(request):  # type: ignore[no-untyped-def]
     if request.method == "OPTIONS":
         return Response(status_code=204, headers=_MANAGE_CORS)
     _prune_manage()
-    rec = _MANAGE.get(request.path_params["token"])
-    if rec is None:
+    if _MANAGE.get(request.path_params["token"]) is None:
         return JSONResponse(
             {"ok": False, "error": "expired"}, status_code=404, headers=_MANAGE_CORS
         )
-    source = rec["source"]
-    pinned = [tool for (src, tool) in _PINNED if src == source]
     if request.method == "POST":
+        # {"changes": {source: {tool: mode}}} -- one save can span connectors.
         changes = (await request.json()).get("changes") or {}
-        bad = {t: m for t, m in changes.items() if m not in _MODES}
+        bad = [
+            f"{src}/{tool}={mode}"
+            for src, tools in changes.items()
+            for tool, mode in tools.items()
+            if mode not in _MODES
+        ]
         if bad:
             return JSONResponse(
                 {"ok": False, "error": f"invalid modes: {bad}"},
                 status_code=400,
                 headers=_MANAGE_CORS,
             )
-        refused = [t for t in changes if (source, t) in _PINNED]
-        modes = _source_state(source)["modes"]
-        for tool, mode in changes.items():
-            if tool not in refused:
-                modes[tool] = mode
+        refused: dict[str, list[str]] = {}
+        applied = 0
+        for src, tools in changes.items():
+            modes = _source_state(src)["modes"]
+            for tool, mode in tools.items():
+                if (src, tool) in _PINNED:
+                    refused.setdefault(src, []).append(tool)
+                else:
+                    modes[tool] = mode
+                    applied += 1
         _save_state()
-        applied = len(changes) - len(refused)
-        log.info("manage save: %s (%d applied, refused=%s)", source, applied, refused)
+        log.info("manage save: %d applied, refused=%s", applied, refused)
         return JSONResponse(
-            {"ok": True, "applied": applied, "refused": refused, "modes": _effective_modes(source)},
-            headers=_MANAGE_CORS,
+            {"ok": True, "applied": applied, "refused": refused}, headers=_MANAGE_CORS
         )
-    # GET: the widget's data source -- the same catalog+modes view the gatekeeper reads.
-    modes = _effective_modes(source)
-    tools = {
-        name: {**info, "mode": modes.get(name, _DEFAULT_MODE)}
-        for name, info in ((_STATE.get(source) or {}).get("catalog") or {}).items()
-    }
-    return JSONResponse(
-        {"ok": True, "source": source, "tools": tools, "pinned": pinned},
-        headers=_MANAGE_CORS,
-    )
+    # GET: the widget's data source -- every connector with a registered catalog,
+    # each with the same catalog+modes view the gatekeeper reads.
+    sources = {}
+    for src, st in _STATE.items():
+        catalog = st.get("catalog") or {}
+        if not catalog:
+            continue
+        modes = _effective_modes(src)
+        sources[src] = {
+            "tools": {
+                name: {**info, "mode": modes.get(name, _DEFAULT_MODE)}
+                for name, info in catalog.items()
+            },
+            "pinned": [tool for (s, tool) in _PINNED if s == src],
+        }
+    return JSONResponse({"ok": True, "sources": sources}, headers=_MANAGE_CORS)
 
 
 async def healthz(request):  # type: ignore[no-untyped-def]

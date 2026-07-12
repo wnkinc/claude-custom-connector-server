@@ -33,14 +33,15 @@ def register_manage_widget(mcp) -> None:  # type: ignore[no-untyped-def]
     approval_url = os.getenv("APPROVAL_URL", "http://127.0.0.1:8072").rstrip("/")
 
     @mcp.tool(meta={"ui": {"resourceUri": uri}, "ui/resourceUri": uri})
-    async def manage_tools(source: str = "telegram") -> str:
-        """Open the tool-permissions panel for `source` in the chat: every tool with
-        its mode (always_allow / needs_approval / blocked), which the USER reviews and
-        saves right in the panel. Nothing changes until the user clicks Save there; to
-        change a mode conversationally instead, use set_gating."""
+    async def manage_tools() -> str:
+        """Open the tool-permissions panel in the chat: one section per connector
+        (telegram, xmcp, ...), every tool with its mode (always_allow /
+        needs_approval / blocked), which the USER reviews and saves right in the
+        panel. Nothing changes until the user clicks Save there; to change a mode
+        conversationally instead, use set_gating."""
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(f"{approval_url}/manage", json={"source": source})
+                resp = await client.post(f"{approval_url}/manage", json={})
             token = resp.json().get("token", "")
         except Exception:  # noqa: BLE001 - sidecar down -> no session, say so plainly
             token = ""
@@ -49,11 +50,11 @@ def register_manage_widget(mcp) -> None:  # type: ignore[no-untyped-def]
                 "⚠️ The permissions panel could not be opened: the approval service is "
                 "unavailable, so no management session exists. Nothing was changed."
             )
-        marker = json.dumps({"token": token, "source": source})
+        marker = json.dumps({"token": token})
         return (
-            f"A tool-permissions panel for `{source}` is shown in the chat. The user "
-            "reviews each tool's mode there and clicks Save; nothing is changed until "
-            "they do. Saved changes enforce within ~15 seconds, and blocked tools drop "
-            f"off the {source} connector's tool list when it refreshes.\n"
+            "A tool-permissions panel is shown in the chat, one section per connector. "
+            "The user reviews each tool's mode there and clicks Save; nothing is "
+            "changed until they do. Saved changes enforce within ~15 seconds, and "
+            "blocked tools drop off a connector's tool list when it refreshes.\n"
             f"<!--MANAGE {marker}-->"
         )

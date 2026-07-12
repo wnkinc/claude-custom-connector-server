@@ -34,12 +34,20 @@
   .title{font-weight:600;font-size:14px}
   .sub{color:var(--muted);font-size:12.5px;margin-top:2px}
   .groups{overflow-y:auto;max-height:380px;padding:0 16px}
+  /* connector section (one per source: telegram, xmcp, ...) */
+  .shead{display:flex;align-items:center;padding:12px 0 4px}
+  .stoggle{display:flex;align-items:center;gap:9px;flex:1;min-width:0;background:none;border:0;
+    padding:0;font:inherit;color:var(--ink);cursor:pointer;text-align:left}
+  .sava{width:20px;height:20px;flex:none;display:flex;align-items:center;justify-content:center;
+    font-size:11px;color:var(--ink-2);background:var(--thumb);border:1px solid var(--border);
+    border-radius:6px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  .sname{font-weight:600;font-size:13.5px}
   /* group header row */
   .ghead{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)}
   .gtoggle{display:flex;align-items:center;gap:10px;flex:1;min-width:0;background:none;border:0;
     padding:0;font:inherit;color:var(--ink);cursor:pointer;text-align:left}
   .chev{color:var(--muted);transition:transform .2s;flex:none;display:flex}
-  .collapsed .chev{transform:rotate(-90deg)}
+  .collapsed > .ghead > .gtoggle .chev, .srcsec.collapsed > .shead .chev{transform:rotate(-90deg)}
   .count{flex:none;font-size:11px;color:var(--ink-2);background:var(--tint);border-radius:999px;padding:1px 8px}
   /* group blanket button */
   .blanket{position:relative;flex:none}
@@ -101,7 +109,7 @@
 <div class="card" id="card" hidden>
   <div class="lead">
     <div class="title">Tool permissions</div>
-    <div class="sub" id="sub">Choose when Claude is allowed to use these tools.</div>
+    <div class="sub" id="sub">Server-enforced approval gates — set each tool to run freely, need your approval, or be blocked.</div>
   </div>
   <div class="fullnote" id="fullnote" hidden></div>
   <div class="groups" id="groups"></div>
@@ -143,14 +151,22 @@ const ICONS = Object.fromEntries(MODES.map((m) => [m, icon(ICON_PATHS[m])]));
 const SMALL_ICONS = Object.fromEntries(MODES.map((m) => [m, icon(ICON_PATHS[m], 13)]));
 const CHEV = '<svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M16.134 6.16a.5.5 0 1 1 .732.68l-6.5 7-.077.068a.5.5 0 0 1-.655-.068l-6.5-7-.062-.08a.5.5 0 0 1 .718-.667l.076.067L10 12.767z"/></svg>';
 
-const titleCase = (name) => name.split("_").map((w) => w ? w[0].toUpperCase() + w.slice(1) : w).join(" ");
+// snake_case AND camelCase tool names -> display names ("send_message", "createPost")
+const titleCase = (name) =>
+  name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[_\s]+/)
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
 
-let ctx = null;          // {token, source}
-let base = {};           // tool -> saved mode (server truth)
-let current = {};        // tool -> selected mode
-let pinned = new Set();
-let rowEls = {};         // tool -> {row, seg, thumb, btns}
-let groupState = {};     // key -> {tools: [...], blanketBtn}
+const SEP = "\u001f";  // keys span connectors; a char no tool/source name contains
+const K = (src, tool) => src + SEP + tool;
+let ctx = null;          // {token}
+let base = {};           // K(src,tool) -> saved mode (server truth)
+let current = {};        // K(src,tool) -> selected mode
+let pinned = new Set();  // K(src,tool)
+let rowEls = {};         // K(src,tool) -> {row, seg, thumb, btns}
+let groupState = {};     // "src|label" -> {keys, bicon, blabel}
 
 function parsePayload(text) {
   const m = text && text.match(/<!--MANAGE\s+(\{[\s\S]*?\})\s*-->/);
@@ -185,7 +201,7 @@ function refreshChrome() {
     els.row.classList.toggle("dirty", current[tool] !== base[tool]);
   }
   for (const g of Object.values(groupState)) {
-    const modes = new Set(g.tools.map((t) => current[t]));
+    const modes = new Set(g.keys.map((t) => current[t]));
     if (modes.size === 1) {
       const m = [...modes][0];
       g.blabel.textContent = MODE_LABEL[m];
@@ -206,15 +222,15 @@ function select(tool, mode) {
   refreshChrome();
 }
 
-function buildSeg(tool) {
+function buildSeg(key, tool) {
   const seg = document.createElement("div");
-  seg.className = "seg" + (pinned.has(tool) ? " pinned" : "");
+  seg.className = "seg" + (pinned.has(key) ? " pinned" : "");
   seg.setAttribute("role", "radiogroup");
   seg.setAttribute("aria-label", titleCase(tool));
-  if (pinned.has(tool)) seg.title = "Pinned in the server's code — not changeable here.";
+  if (pinned.has(key)) seg.title = "Pinned in the server's code — not changeable here.";
   const thumb = document.createElement("div");
   thumb.className = "sthumb";
-  thumb.style.transform = `translateX(${MODES.indexOf(current[tool]) * 30}px)`;
+  thumb.style.transform = `translateX(${MODES.indexOf(current[key]) * 30}px)`;
   seg.append(thumb);
   const btns = MODES.map((mode) => {
     const b = document.createElement("button");
@@ -222,10 +238,10 @@ function buildSeg(tool) {
     b.setAttribute("role", "radio");
     b.dataset.mode = mode;
     b.setAttribute("aria-label", MODE_LABEL[mode]);
-    b.setAttribute("aria-checked", String(current[tool] === mode));
+    b.setAttribute("aria-checked", String(current[key] === mode));
     b.title = MODE_LABEL[mode];
     b.innerHTML = ICONS[mode];
-    b.addEventListener("click", () => select(tool, mode));
+    b.addEventListener("click", () => select(key, mode));
     seg.append(b);
     return b;
   });
@@ -235,7 +251,8 @@ function buildSeg(tool) {
 function closeMenus() { document.querySelectorAll(".menu").forEach((m) => m.remove()); }
 document.addEventListener("click", (e) => { if (!e.target.closest(".blanket")) closeMenus(); });
 
-function buildGroup(label, tools) {
+function buildGroup(src, label, tools) {
+  const keys = tools.map((t) => K(src, t));
   const wrap = document.createElement("div");
   const ghead = document.createElement("div");
   ghead.className = "ghead";
@@ -261,16 +278,17 @@ function buildGroup(label, tools) {
   const rows = document.createElement("div");
   rows.className = "rows";
   for (const tool of tools) {
+    const key = K(src, tool);
     const row = document.createElement("div");
     row.className = "row";
     const name = document.createElement("span");
     name.className = "tname";
     name.textContent = titleCase(tool);
     name.title = tool;
-    const { seg, thumb, btns } = buildSeg(tool);
+    const { seg, thumb, btns } = buildSeg(key, tool);
     row.append(name, seg);
     rows.append(row);
-    rowEls[tool] = { row, seg, thumb, btns };
+    rowEls[key] = { row, seg, thumb, btns };
   }
   toggle.addEventListener("click", () => {
     const open = rows.hidden;
@@ -292,49 +310,85 @@ function buildGroup(label, tools) {
       mi.className = "micon";
       mi.innerHTML = SMALL_ICONS[mode];
       opt.append(mi, MODE_LABEL[mode]);
-      opt.addEventListener("click", () => { tools.forEach((t) => select(t, mode)); closeMenus(); });
+      opt.addEventListener("click", () => { keys.forEach((k) => select(k, mode)); closeMenus(); });
       menu.append(opt);
     }
     blanket.append(menu);
   });
-  groupState[label] = { tools, bicon, blabel };
+  groupState[`${src}|${label}`] = { keys, bicon, blabel };
   wrap.append(ghead, rows);
+  return wrap;
+}
+
+function buildSource(src, info) {
+  const wrap = document.createElement("div");
+  wrap.className = "srcsec";
+  const shead = document.createElement("div");
+  shead.className = "shead";
+  const stoggle = document.createElement("button");
+  stoggle.type = "button";
+  stoggle.className = "stoggle";
+  stoggle.setAttribute("aria-expanded", "true");
+  const count = Object.keys(info.tools).length;
+  stoggle.innerHTML =
+    `<span class="chev">${CHEV}</span><span class="sava">${src[0].toUpperCase()}</span>` +
+    `<span class="sname">${titleCase(src)}</span><span class="count">${count}</span>`;
+  shead.append(stoggle);
+  const content = document.createElement("div");
+  // Same buckets as Claude's connector UI: readOnlyHint true / explicit false /
+  // annotations absent.
+  const names = Object.keys(info.tools).sort();
+  const byGroup = { "Read-only tools": [], "Write/delete tools": [], "Other tools": [] };
+  for (const tool of names) {
+    const ro = info.tools[tool].read_only;
+    byGroup[ro === true ? "Read-only tools" : ro === false ? "Write/delete tools" : "Other tools"].push(tool);
+  }
+  for (const [label, list] of Object.entries(byGroup)) {
+    if (list.length) content.append(buildGroup(src, label, list));
+  }
+  stoggle.addEventListener("click", () => {
+    const open = content.hidden;
+    content.hidden = !open;
+    stoggle.setAttribute("aria-expanded", String(open));
+    wrap.classList.toggle("collapsed", !open);
+  });
+  wrap.append(shead, content);
   return wrap;
 }
 
 function render(data) {
   base = {}; current = {}; rowEls = {}; groupState = {};
-  pinned = new Set(data.pinned || []);
-  const entries = Object.entries(data.tools || {}).sort(([a], [b]) => a.localeCompare(b));
-  for (const [tool, info] of entries) { base[tool] = info.mode; current[tool] = info.mode; }
+  pinned = new Set();
+  const sources = Object.entries(data.sources || {}).sort(([a], [b]) => a.localeCompare(b));
+  for (const [src, info] of sources) {
+    for (const t of info.pinned || []) pinned.add(K(src, t));
+    for (const [tool, tinfo] of Object.entries(info.tools)) {
+      base[K(src, tool)] = tinfo.mode;
+      current[K(src, tool)] = tinfo.mode;
+    }
+  }
   const groups = $("groups");
   groups.replaceChildren();
-  if (!entries.length) {
+  if (!sources.length) {
     $("fullnote").hidden = false;
     $("fullnote").textContent =
-      `No tools registered for "${ctx.source}" yet — connect or refresh that connector once, then reopen this panel.`;
+      "No tool catalogs registered yet — connect or refresh a connector once, then reopen this panel.";
     return;
   }
-  // Same buckets as Claude's connector UI: readOnlyHint true / explicit false /
-  // annotations absent.
-  const byGroup = { "Read-only tools": [], "Write/delete tools": [], "Other tools": [] };
-  for (const [tool, info] of entries) {
-    const key =
-      info.read_only === true ? "Read-only tools"
-      : info.read_only === false ? "Write/delete tools"
-      : "Other tools";
-    byGroup[key].push(tool);
-  }
-  for (const [label, list] of Object.entries(byGroup)) {
-    if (list.length) groups.append(buildGroup(label, list));
-  }
+  for (const [src, info] of sources) groups.append(buildSource(src, info));
   $("savebar").hidden = false;
   refreshChrome();
 }
 
 async function save() {
-  const changes = dirtyMap();
-  if (!Object.keys(changes).length) return;
+  const dirty = dirtyMap();
+  if (!Object.keys(dirty).length) return;
+  // Nest the flat keys back into {source: {tool: mode}} for the wire.
+  const changes = {};
+  for (const [key, mode] of Object.entries(dirty)) {
+    const [src, tool] = key.split(SEP);
+    (changes[src] ??= {})[tool] = mode;
+  }
   $("save").disabled = true;
   setNote("Saving…");
   try {
@@ -346,9 +400,21 @@ async function save() {
     if (resp.status === 404) { setNote("Session expired — ask for the panel again.", "err"); return; }
     const data = await resp.json();
     if (!data.ok) { setNote(data.error || "Save failed.", "err"); refreshChrome(); return; }
-    for (const [tool, mode] of Object.entries(changes)) if (!data.refused?.includes(tool)) base[tool] = mode;
-    const refusedNote = data.refused?.length ? ` (${data.refused.join(", ")} is pinned and was not changed)` : "";
-    setNote(`Saved — enforced within ~15s; refresh the ${ctx.source} connector to update Claude's tool list.${refusedNote}`, "ok");
+    const refusedFlat = [];
+    for (const [src, tools] of Object.entries(changes)) {
+      for (const [tool, mode] of Object.entries(tools)) {
+        if (data.refused?.[src]?.includes(tool)) refusedFlat.push(`${src}/${tool}`);
+        else base[K(src, tool)] = mode;
+      }
+    }
+    const srcs = Object.keys(changes).sort();
+    const refusedNote = refusedFlat.length
+      ? ` (${refusedFlat.join(", ")} is pinned and was not changed)` : "";
+    setNote(
+      `Saved — enforced within ~15s; refresh the ${srcs.join(" and ")} ` +
+      `connector${srcs.length > 1 ? "s" : ""} to update Claude's tool list.${refusedNote}`,
+      "ok",
+    );
     refreshChrome();
   } catch (e) {
     diag("save failed: " + (e?.message ?? e));
@@ -380,7 +446,6 @@ app.ontoolresult = (result) => {
   const p = parsePayload(text);
   if (p?.token) {
     ctx = p;
-    $("sub").textContent = `Choose when Claude is allowed to use these ${p.source} tools.`;
     document.body.style.padding = "12px";
     $("card").hidden = false;
     load();
