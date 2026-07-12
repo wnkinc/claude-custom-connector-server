@@ -3,7 +3,8 @@
 The approval sidecar is the sole authority on tool modes (see
 security/approval/gating.py): each approval-enabled server registers its full tool
 catalog there, every tool defaults to always_allow, and the operator's choices are
-stored per (source, tool). Two tools:
+stored per (source, tool). Three tools -- manage_tools (the in-chat permissions
+panel, see security/approval/manage_widget.py) plus:
 
   - list_gating(source)          -- read-only: EVERY tool on that server with its
         mode, grouped read-only vs write like Claude's connector UI. Blocked tools
@@ -28,6 +29,7 @@ import httpx
 from fastmcp import FastMCP
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from security.approval.manage_widget import register_manage_widget  # noqa: E402
 from security.serve import serve  # noqa: E402
 
 mcp = FastMCP(name="gatekeeper")
@@ -90,7 +92,9 @@ async def set_gating(
 
 def main() -> None:
     port = int(os.getenv("MCP_PORT", "8065"))
-    # Both tools default to always_allow like everything else -- EXCEPT set_gating,
+    # The in-chat permissions panel (manage_tools + its ui:// resource).
+    register_manage_widget(mcp)
+    # Tools default to always_allow like everything else -- EXCEPT set_gating,
     # which the sidecar pins to needs_approval (see _PINNED in its service.py).
     serve(mcp, port=port, require_approval=True)
 

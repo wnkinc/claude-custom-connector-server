@@ -37,6 +37,7 @@ PUBLIC = "https://approval.example.com"
 def clean(monkeypatch):
     svc._PENDING.clear()
     svc._STATE.clear()
+    svc._MANAGE.clear()
     gating_mod._cache.clear()  # the TTL cache must not leak modes across tests
     monkeypatch.delenv("APPROVAL_STATE_FILE", raising=False)  # memory-only in tests
     monkeypatch.setenv("APPROVAL_PUBLIC_URL", PUBLIC)
@@ -629,3 +630,84 @@ def test_middleware_list_survives_a_down_sidecar():
     mw = ApprovalMiddleware(approval_url="http://127.0.0.1:9", source="t", timeout=0.5)
     out = asyncio.run(_list_via(mw, [_tool("send_message")]))
     assert [t.name for t in out] == ["send_message"]
+
+
+# --- manage sessions: the permissions widget's capability API -------------------------
+
+
+def _mint(client, source="teltool"):
+    return client.post("/manage", json={"source": source}).json()["token"]
+
+
+def test_manage_session_serves_catalog_modes_and_cors():
+    c = TestClient(svc.app)
+    c.post(
+        "/catalog",
+        json={
+            "source": "teltool",
+            "tools": [
+                {"name": "send_message", "read_only": False, "description": "d"},
+                {"name": "get_me", "read_only": True},
+            ],
+        },
+    )
+    _set_mode(c, "send_message", "blocked")
+    r = c.get(f"/manage/{_mint(c)}")
+    # The widget iframe reads this cross-origin: CORS must be open (token = credential).
+    assert r.headers["access-control-allow-origin"] == "*"
+    data = r.json()
+    assert data["tools"]["send_message"] == {
+        "description": "d",
+        "read_only": False,
+        "mode": "blocked",
+    }
+    assert data["tools"]["get_me"]["mode"] == "always_allow"
+    assert data["pinned"] == []
+
+
+def test_manage_save_applies_persists_and_allows_resave(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPROVAL_STATE_FILE", str(tmp_path / "s.json"))
+    c = TestClient(svc.app)
+    token = _mint(c)
+    r = c.post(
+        f"/manage/{token}",
+        json={"changes": {"send_message": "blocked", "get_me": "needs_approval"}},
+    ).json()
+    assert r["applied"] == 2 and r["refused"] == []
+    # A widget save is a first-class choice: enforced via /gating and restart-proof.
+    svc._STATE.clear()
+    svc._load_state()
+    assert c.get("/gating", params={"source": "teltool"}).json()["modes"] == {
+        "send_message": "blocked",
+        "get_me": "needs_approval",
+    }
+    # The same session token allows further saves while alive.
+    again = c.post(f"/manage/{token}", json={"changes": {"send_message": "always_allow"}}).json()
+    assert again["ok"] is True and again["modes"]["send_message"] == "always_allow"
+
+
+def test_manage_save_respects_pins_and_validates_modes():
+    c = TestClient(svc.app)
+    r = c.post(
+        f"/manage/{_mint(c, source='gatekeeper')}",
+        json={"changes": {"set_gating": "always_allow"}},
+    ).json()
+    # The widget cannot unpin set_gating any more than the tool can.
+    assert r["applied"] == 0 and r["refused"] == ["set_gating"]
+    assert r["modes"]["set_gating"] == "needs_approval"
+    assert c.post(f"/manage/{_mint(c)}", json={"changes": {"a": "sideways"}}).status_code == 400
+
+
+def test_manage_token_expires_and_unknown_is_404():
+    c = TestClient(svc.app)
+    token = _mint(c)
+    svc._MANAGE[token]["created"] -= svc._TTL_SECONDS + 1
+    assert c.get(f"/manage/{token}").status_code == 404
+    assert c.post("/manage/nope", json={"changes": {}}).status_code == 404
+
+
+def test_manage_preflight_is_answered():
+    r = TestClient(svc.app).options("/manage/whatever")
+    assert r.status_code == 204
+    assert r.headers["access-control-allow-methods"] == "GET, POST, OPTIONS"
+    assert r.headers["access-control-allow-headers"] == "content-type"

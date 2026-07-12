@@ -714,6 +714,84 @@ async def gating(request):  # type: ignore[no-untyped-def]
     return JSONResponse({"ok": True, "source": source, "modes": _effective_modes(source)})
 
 
+# ---------------------------------------------------------------------------
+# Manage sessions: capability tokens for the in-chat tool-permissions widget.
+# Minting (bare POST /manage) is INTERNAL-ONLY -- the tunnel path-routes only
+# /manage/<token> to the public internet -- so only the gatekeeper's manage_tools
+# tool can start a session; the widget in the user's browser redeems it. The
+# human's click on Save IS the authorization (the model can't make HTTP requests),
+# which is why a save needs no approval card. Pins still hold: a change to a
+# _PINNED entry is refused here too. Tokens share the approval TTL and allow
+# multiple saves while alive (it's an editing session, not a one-shot).
+_MANAGE: dict[str, dict] = {}  # token -> {"source": str, "created": float}
+
+# The token in the URL is the credential, so any browser origin may call these
+# two routes (the widget iframe's origin varies by host).
+_MANAGE_CORS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "content-type",
+}
+
+
+def _prune_manage() -> None:
+    now = time.time()
+    for token in [t for t, r in _MANAGE.items() if now - r["created"] > _TTL_SECONDS]:
+        _MANAGE.pop(token, None)
+
+
+async def manage_mint(request):  # type: ignore[no-untyped-def]
+    body = await request.json()
+    _prune_manage()
+    token = secrets.token_urlsafe(24)
+    _MANAGE[token] = {"source": body["source"], "created": time.time()}
+    return JSONResponse({"ok": True, "token": token})
+
+
+async def manage_session(request):  # type: ignore[no-untyped-def]
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=_MANAGE_CORS)
+    _prune_manage()
+    rec = _MANAGE.get(request.path_params["token"])
+    if rec is None:
+        return JSONResponse(
+            {"ok": False, "error": "expired"}, status_code=404, headers=_MANAGE_CORS
+        )
+    source = rec["source"]
+    pinned = [tool for (src, tool) in _PINNED if src == source]
+    if request.method == "POST":
+        changes = (await request.json()).get("changes") or {}
+        bad = {t: m for t, m in changes.items() if m not in _MODES}
+        if bad:
+            return JSONResponse(
+                {"ok": False, "error": f"invalid modes: {bad}"},
+                status_code=400,
+                headers=_MANAGE_CORS,
+            )
+        refused = [t for t in changes if (source, t) in _PINNED]
+        modes = _source_state(source)["modes"]
+        for tool, mode in changes.items():
+            if tool not in refused:
+                modes[tool] = mode
+        _save_state()
+        applied = len(changes) - len(refused)
+        log.info("manage save: %s (%d applied, refused=%s)", source, applied, refused)
+        return JSONResponse(
+            {"ok": True, "applied": applied, "refused": refused, "modes": _effective_modes(source)},
+            headers=_MANAGE_CORS,
+        )
+    # GET: the widget's data source -- the same catalog+modes view the gatekeeper reads.
+    modes = _effective_modes(source)
+    tools = {
+        name: {**info, "mode": modes.get(name, _DEFAULT_MODE)}
+        for name, info in ((_STATE.get(source) or {}).get("catalog") or {}).items()
+    }
+    return JSONResponse(
+        {"ok": True, "source": source, "tools": tools, "pinned": pinned},
+        headers=_MANAGE_CORS,
+    )
+
+
 async def healthz(request):  # type: ignore[no-untyped-def]
     provider = _provider()
     return JSONResponse(
@@ -736,6 +814,8 @@ app = Starlette(
         Route("/telegram/interact", telegram_interact, methods=["POST"]),
         Route("/gating", gating, methods=["GET", "POST"]),
         Route("/catalog", catalog, methods=["GET", "POST"]),
+        Route("/manage", manage_mint, methods=["POST"]),
+        Route("/manage/{token}", manage_session, methods=["GET", "POST", "OPTIONS"]),
         Route("/healthz", healthz, methods=["GET"]),
     ]
 )

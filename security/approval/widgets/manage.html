@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  /* Same transparent, host-theme-following conventions as approve.html (see its
+     header comment for why data-theme + inline color-scheme matter). Layout
+     replicates Claude's connector tool-permissions screen: grouped collapsible
+     sections, hairline rows, and a 3-segment sliding control per tool. */
+  :root {
+    --ink:#1c1c1a; --ink-2:#5d5b55; --muted:#84827b;
+    --border:rgba(0,0,0,0.13); --tint:rgba(0,0,0,0.045);
+    --thumb:#fffdfa; --thumb-border:rgba(0,0,0,0.15);
+    --accent:#c96442; --accent-hover:#b5573a; --accent-ink:#fffdfa;
+    --ok:#1a7f37; --no:#b3261e; color-scheme:light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --ink:#ededeb; --ink-2:#b8b7af; --muted:#8d8c85;
+      --border:rgba(255,255,255,0.16); --tint:rgba(255,255,255,0.06);
+      --thumb:rgba(255,255,255,0.14); --thumb-border:rgba(255,255,255,0.18);
+      --accent:#c96442; --accent-hover:#d97757; --accent-ink:#fffdfa;
+      --ok:#5bb96a; --no:#e5645c; color-scheme:dark; }
+  }
+  :root[data-theme="dark"] { --ink:#ededeb; --ink-2:#b8b7af; --muted:#8d8c85;
+    --border:rgba(255,255,255,0.16); --tint:rgba(255,255,255,0.06);
+    --thumb:rgba(255,255,255,0.14); --thumb-border:rgba(255,255,255,0.18);
+    --accent:#c96442; --accent-hover:#d97757; --accent-ink:#fffdfa;
+    --ok:#5bb96a; --no:#e5645c; color-scheme:dark; }
+  html,body{margin:0;background:transparent}
+  body{font:13.5px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);padding:0}
+  .card{border:1px solid var(--border);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+  .lead{padding:14px 16px 6px}
+  .title{font-weight:600;font-size:14px}
+  .sub{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .groups{overflow-y:auto;max-height:380px;padding:0 16px}
+  /* group header row */
+  .ghead{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)}
+  .gtoggle{display:flex;align-items:center;gap:10px;flex:1;min-width:0;background:none;border:0;
+    padding:0;font:inherit;color:var(--ink);cursor:pointer;text-align:left}
+  .chev{color:var(--muted);transition:transform .2s;flex:none;display:flex}
+  .collapsed .chev{transform:rotate(-90deg)}
+  .count{flex:none;font-size:11px;color:var(--ink-2);background:var(--tint);border-radius:999px;padding:1px 8px}
+  /* group blanket button */
+  .blanket{position:relative;flex:none}
+  .blanket>button{font:inherit;font-size:12px;color:var(--ink);background:var(--tint);border:0;
+    border-radius:7px;padding:4px 10px;cursor:pointer;display:flex;align-items:center;gap:5px}
+  .blanket>button:hover{background:var(--border)}
+  .menu{position:absolute;right:0;top:calc(100% + 4px);z-index:5;min-width:150px;
+    background:Canvas;border:1px solid var(--border);border-radius:9px;padding:4px;
+    box-shadow:0 4px 16px rgba(0,0,0,.18)}
+  .menu button{display:block;width:100%;text-align:left;font:inherit;font-size:12.5px;color:var(--ink);
+    background:none;border:0;border-radius:6px;padding:6px 9px;cursor:pointer}
+  .menu button:hover{background:var(--tint)}
+  /* tool rows */
+  .row{display:flex;align-items:center;gap:14px;min-height:44px;padding:4px 0 4px 24px;
+    border-bottom:1px solid var(--border)}
+  .rows > .row:last-child{border-bottom:0}
+  .tname{flex:1;min-width:0;font-size:13px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row.dirty .tname{color:var(--ink)}
+  /* 3-segment sliding control (values: always_allow / needs_approval / blocked) */
+  .seg{position:relative;flex:none;display:inline-flex;padding:1px;border-radius:8px;background:var(--tint)}
+  .seg .sthumb{position:absolute;top:1px;bottom:1px;width:30px;border-radius:7px;background:var(--thumb);
+    box-shadow:inset 0 0 0 1px var(--thumb-border),0 1px 2px rgba(0,0,0,.05);
+    transition:transform .15s ease;pointer-events:none}
+  .seg button{position:relative;z-index:1;width:30px;height:26px;display:flex;align-items:center;
+    justify-content:center;background:none;border:0;border-radius:7px;color:var(--muted);cursor:pointer;padding:0}
+  .seg button:hover{color:var(--ink)}
+  .seg button[aria-checked="true"]{color:var(--ink)}
+  .seg.pinned{opacity:.55}
+  .seg.pinned button{cursor:default}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  /* save bar */
+  .savebar{display:flex;align-items:center;gap:10px;padding:10px 16px;border-top:1px solid var(--border)}
+  .note{flex:1;font-size:12px;color:var(--ink-2)}
+  .note.err{color:var(--no)} .note.ok{color:var(--ok)}
+  .save{font:inherit;font-weight:500;padding:7px 16px;border-radius:8px;border:0;cursor:pointer;
+    background:var(--accent);color:var(--accent-ink);transition:background .1s}
+  .save:hover:enabled{background:var(--accent-hover)}
+  .save:disabled{opacity:.45;cursor:default}
+  .fullnote{padding:14px 16px;font-size:12.5px;color:var(--ink-2)}
+  details{border-top:1px solid var(--border)}
+  summary{cursor:pointer;color:var(--muted);font-size:11px;padding:8px 16px;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  #diag{font-family:ui-monospace,monospace;font-size:11px;white-space:pre-wrap;color:var(--muted);
+    padding:0 16px 10px;max-height:160px;overflow-y:auto}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<script>
+  window.diag = (m) => { const d=document.getElementById("diag"); if(d) d.textContent += m+"\n"; };
+  ["error","unhandledrejection"].forEach((k)=>addEventListener(k,(e)=>diag("PAGE ERROR: "+(e.reason?.message??e.reason??e.message??k))));
+</script>
+<div class="card" id="card" hidden>
+  <div class="lead">
+    <div class="title">Tool permissions</div>
+    <div class="sub" id="sub">Choose when Claude is allowed to use these tools.</div>
+  </div>
+  <div class="fullnote" id="fullnote" hidden></div>
+  <div class="groups" id="groups"></div>
+  <div class="savebar" id="savebar" hidden>
+    <div class="note" id="note"></div>
+    <button class="save" id="save" type="button" disabled>Save</button>
+  </div>
+  <details>
+    <summary>diagnostics</summary>
+    <div id="diag"></div>
+  </details>
+</div>
+<script type="module">
+/*__EXT_APPS_BUNDLE__*/
+</script>
+<script type="module">
+const { App, applyDocumentTheme } = globalThis.ExtApps;
+const $ = (id) => document.getElementById(id);
+const PUBLIC_BASE = "__APPROVAL_PUBLIC_BASE__";  // baked in by the resource handler
+
+let curTheme = null;
+const applyTheme = (t) => {
+  if ((t === "dark" || t === "light") && t !== curTheme) { curTheme = t; applyDocumentTheme(t); }
+};
+
+const MODES = ["always_allow", "needs_approval", "blocked"];
+const MODE_LABEL = { always_allow: "Always allow", needs_approval: "Needs approval", blocked: "Blocked" };
+// Inline 14px glyphs (Claude's are a private icon font): check / clock / slash-circle.
+const ICONS = {
+  always_allow: '<svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M15.188 5.11a.5.5 0 0 1 .752.626l-.056.084-7.5 9a.5.5 0 0 1-.738.033l-3.5-3.5-.064-.078a.501.501 0 0 1 .693-.693l.078.064 3.113 3.113 7.15-8.58z"/></svg>',
+  needs_approval: '<svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="10" cy="10" r="6.7"/><path d="M10 6.4V10l2.4 1.7" stroke-linecap="round"/></svg>',
+  blocked: '<svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="10" cy="10" r="6.7"/><path d="M5.3 5.3l9.4 9.4"/></svg>',
+};
+const CHEV = '<svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M16.134 6.16a.5.5 0 1 1 .732.68l-6.5 7-.077.068a.5.5 0 0 1-.655-.068l-6.5-7-.062-.08a.5.5 0 0 1 .718-.667l.076.067L10 12.767z"/></svg>';
+
+const titleCase = (name) => name.split("_").map((w) => w ? w[0].toUpperCase() + w.slice(1) : w).join(" ");
+
+let ctx = null;          // {token, source}
+let base = {};           // tool -> saved mode (server truth)
+let current = {};        // tool -> selected mode
+let pinned = new Set();
+let rowEls = {};         // tool -> {row, seg, thumb, btns}
+let groupState = {};     // key -> {tools: [...], blanketBtn}
+
+function parsePayload(text) {
+  const m = text && text.match(/<!--MANAGE\s+(\{[\s\S]*?\})\s*-->/);
+  if (m) { try { return JSON.parse(m[1]); } catch {} }
+  return null;
+}
+
+function setNote(msg, kind) {
+  const n = $("note");
+  n.textContent = msg || "";
+  n.className = "note" + (kind ? " " + kind : "");
+}
+
+function dirtyMap() {
+  const d = {};
+  for (const [tool, mode] of Object.entries(current)) if (mode !== base[tool]) d[tool] = mode;
+  return d;
+}
+
+function refreshChrome() {
+  const n = Object.keys(dirtyMap()).length;
+  $("save").disabled = n === 0;
+  $("save").textContent = n ? `Save (${n})` : "Save";
+  for (const [tool, els] of Object.entries(rowEls)) {
+    els.row.classList.toggle("dirty", current[tool] !== base[tool]);
+  }
+  for (const g of Object.values(groupState)) {
+    const modes = new Set(g.tools.map((t) => current[t]));
+    g.blanketBtn.firstChild.textContent = modes.size === 1 ? MODE_LABEL[[...modes][0]] : "Custom";
+  }
+}
+
+function select(tool, mode) {
+  if (pinned.has(tool)) return;
+  current[tool] = mode;
+  const els = rowEls[tool];
+  els.thumb.style.transform = `translateX(${MODES.indexOf(mode) * 30}px)`;
+  els.btns.forEach((b) => b.setAttribute("aria-checked", String(b.dataset.mode === mode)));
+  refreshChrome();
+}
+
+function buildSeg(tool) {
+  const seg = document.createElement("div");
+  seg.className = "seg" + (pinned.has(tool) ? " pinned" : "");
+  seg.setAttribute("role", "radiogroup");
+  seg.setAttribute("aria-label", titleCase(tool));
+  if (pinned.has(tool)) seg.title = "Pinned in the server's code — not changeable here.";
+  const thumb = document.createElement("div");
+  thumb.className = "sthumb";
+  thumb.style.transform = `translateX(${MODES.indexOf(current[tool]) * 30}px)`;
+  seg.append(thumb);
+  const btns = MODES.map((mode) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("role", "radio");
+    b.dataset.mode = mode;
+    b.setAttribute("aria-label", MODE_LABEL[mode]);
+    b.setAttribute("aria-checked", String(current[tool] === mode));
+    b.title = MODE_LABEL[mode];
+    b.innerHTML = ICONS[mode];
+    b.addEventListener("click", () => select(tool, mode));
+    seg.append(b);
+    return b;
+  });
+  return { seg, thumb, btns };
+}
+
+function closeMenus() { document.querySelectorAll(".menu").forEach((m) => m.remove()); }
+document.addEventListener("click", (e) => { if (!e.target.closest(".blanket")) closeMenus(); });
+
+function buildGroup(label, tools) {
+  const wrap = document.createElement("div");
+  const ghead = document.createElement("div");
+  ghead.className = "ghead";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "gtoggle";
+  toggle.setAttribute("aria-expanded", "true");
+  toggle.innerHTML = `<span class="chev">${CHEV}</span><span>${label}</span><span class="count">${tools.length}</span>`;
+  const blanket = document.createElement("div");
+  blanket.className = "blanket";
+  const bbtn = document.createElement("button");
+  bbtn.type = "button";
+  bbtn.setAttribute("aria-label", "Blanket permission for group");
+  bbtn.append(document.createTextNode(""), Object.assign(document.createElement("span"), { className: "chev" }));
+  bbtn.lastChild.innerHTML = CHEV;
+  blanket.append(bbtn);
+  ghead.append(toggle, blanket);
+  const rows = document.createElement("div");
+  rows.className = "rows";
+  for (const tool of tools) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const name = document.createElement("span");
+    name.className = "tname";
+    name.textContent = titleCase(tool);
+    name.title = tool;
+    const { seg, thumb, btns } = buildSeg(tool);
+    row.append(name, seg);
+    rows.append(row);
+    rowEls[tool] = { row, seg, thumb, btns };
+  }
+  toggle.addEventListener("click", () => {
+    const open = rows.hidden;
+    rows.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.parentElement.parentElement.classList.toggle("collapsed", !open);
+  });
+  bbtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const existing = blanket.querySelector(".menu");
+    closeMenus();
+    if (existing) return;
+    const menu = document.createElement("div");
+    menu.className = "menu";
+    for (const mode of MODES) {
+      const opt = document.createElement("button");
+      opt.type = "button";
+      opt.textContent = MODE_LABEL[mode];
+      opt.addEventListener("click", () => { tools.forEach((t) => select(t, mode)); closeMenus(); });
+      menu.append(opt);
+    }
+    blanket.append(menu);
+  });
+  groupState[label] = { tools, blanketBtn: bbtn };
+  wrap.append(ghead, rows);
+  return wrap;
+}
+
+function render(data) {
+  base = {}; current = {}; rowEls = {}; groupState = {};
+  pinned = new Set(data.pinned || []);
+  const entries = Object.entries(data.tools || {}).sort(([a], [b]) => a.localeCompare(b));
+  for (const [tool, info] of entries) { base[tool] = info.mode; current[tool] = info.mode; }
+  const groups = $("groups");
+  groups.replaceChildren();
+  if (!entries.length) {
+    $("fullnote").hidden = false;
+    $("fullnote").textContent =
+      `No tools registered for "${ctx.source}" yet — connect or refresh that connector once, then reopen this panel.`;
+    return;
+  }
+  const interactive = entries.filter(([, i]) => !i.read_only).map(([t]) => t);
+  const readonly = entries.filter(([, i]) => i.read_only).map(([t]) => t);
+  if (interactive.length) groups.append(buildGroup("Interactive tools", interactive));
+  if (readonly.length) groups.append(buildGroup("Read-only tools", readonly));
+  $("savebar").hidden = false;
+  refreshChrome();
+}
+
+async function save() {
+  const changes = dirtyMap();
+  if (!Object.keys(changes).length) return;
+  $("save").disabled = true;
+  setNote("Saving…");
+  try {
+    const resp = await fetch(`${PUBLIC_BASE}/manage/${ctx.token}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ changes }),
+    });
+    if (resp.status === 404) { setNote("Session expired — ask for the panel again.", "err"); return; }
+    const data = await resp.json();
+    if (!data.ok) { setNote(data.error || "Save failed.", "err"); refreshChrome(); return; }
+    for (const [tool, mode] of Object.entries(changes)) if (!data.refused?.includes(tool)) base[tool] = mode;
+    const refusedNote = data.refused?.length ? ` (${data.refused.join(", ")} is pinned and was not changed)` : "";
+    setNote(`Saved — enforced within ~15s; refresh the ${ctx.source} connector to update Claude's tool list.${refusedNote}`, "ok");
+    refreshChrome();
+  } catch (e) {
+    diag("save failed: " + (e?.message ?? e));
+    setNote("Couldn't reach the approval service. Try again.", "err");
+    refreshChrome();
+  }
+}
+
+async function load() {
+  try {
+    const resp = await fetch(`${PUBLIC_BASE}/manage/${ctx.token}`);
+    if (resp.status === 404) {
+      $("fullnote").hidden = false;
+      $("fullnote").textContent = "This management session expired — ask for the panel again.";
+      return;
+    }
+    render(await resp.json());
+    diag(`loaded ${Object.keys(base).length} tools; base=${PUBLIC_BASE}`);
+  } catch (e) {
+    diag("load failed: " + (e?.message ?? e));
+    $("fullnote").hidden = false;
+    $("fullnote").textContent = "Couldn't reach the approval service to load the tool list.";
+  }
+}
+
+const app = new App({ name: "manage-widget", version: "0.1.0" }, {}, { autoResize: true });
+app.ontoolresult = (result) => {
+  const text = result?.content?.[0]?.text ?? "";
+  const p = parsePayload(text);
+  if (p?.token) {
+    ctx = p;
+    $("sub").textContent = `Choose when Claude is allowed to use these ${p.source} tools.`;
+    document.body.style.padding = "12px";
+    $("card").hidden = false;
+    load();
+  }
+};
+$("save").addEventListener("click", save);
+app.onhostcontextchanged = (c) => applyTheme(c?.theme);
+await app.connect();
+applyTheme(app.getHostContext()?.theme);
+diag("connected");
+</script>
+</body>
+</html>

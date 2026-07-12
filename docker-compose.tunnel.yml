@@ -97,11 +97,18 @@ configs:
           service: http://telegram:8063
         - hostname: gatekeeper.${MCP_DOMAIN}
           service: http://gatekeeper:8065
-        # The approval sidecar's public pages: the capability-token approve page and
-        # the provider interactivity webhook (signature/secret-verified). Path-routed
-        # to the one sidecar, so point whichever provider you use at its path:
-        # https://approval.<MCP_DOMAIN>/{slack|discord|telegram}/interact.
+        # The approval sidecar goes public ONLY on its human-facing paths: the
+        # capability-token pages (approve + the manage widget's session) and the
+        # provider interactivity webhooks (signature/secret-verified) -- point
+        # whichever provider you use at https://approval.<MCP_DOMAIN>/<provider>/interact.
+        # Everything else on the sidecar is internal-only and must stay that way:
+        # /gate, /gating, /catalog, and the bare /manage token mint are unauthenticated
+        # write surfaces for the tools on the compose network.
         - hostname: approval.${MCP_DOMAIN}
+          path: ^/(approve|manage)/.+
+          service: http://approval:8072
+        - hostname: approval.${MCP_DOMAIN}
+          path: ^/(slack|discord|telegram)/interact$
           service: http://approval:8072
 
         # Everything else is refused.
