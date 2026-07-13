@@ -44,6 +44,11 @@ gatekeeper tool ──► approval sidecar (sole authority on modes) ◄── e
   changing a safety gate always takes a human approval, and no runtime path — tool or
   widget — can lift that pin.
 
+The gatekeeper itself is **not manageable**: the sidecar refuses every mode write
+against the `gatekeeper` source and leaves it out of the panel. Its two tools' behavior
+is fixed in code — `set_gating` always needs approval, and `manage_tools` only ever
+applies what a human reviews and saves.
+
 ## Developing the panel
 
 `python3 scripts/preview-widget.py` serves the real widget at

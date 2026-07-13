@@ -14,9 +14,11 @@ stored per (source, tool). Two tools:
         blocked        -- disabled: calls refuse outright AND the tool is filtered
                           from Claude's tools/list (invisible once the connector
                           refreshes its cached list; the refusal is immediate)
-    set_gating itself is PINNED to needs_approval in the sidecar (a code constant,
-    not stored state): changing a safety gate always takes a human approval, and no
-    runtime path can lift that.
+The gatekeeper's own tools are NOT manageable -- the sidecar refuses every mode
+write against the "gatekeeper" source and omits it from the panel. Their behavior
+is fixed in code: set_gating is pinned to needs_approval (changing a safety gate
+always takes a human approval), and manage_tools is inherently human-in-the-loop
+(nothing changes until the user clicks Save).
 """
 
 import os
@@ -48,7 +50,8 @@ async def set_gating(
     once the connector refreshes).
 
     Changing a gate is itself gated, so this call needs your approval first. After it
-    applies, refresh the `source` connector so its cards and tool list update."""
+    applies, refresh the `source` connector so its cards and tool list update.
+    The gatekeeper's own tools can't be targeted; their behavior is fixed in code."""
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
             f"{APPROVAL_URL}/gating",
