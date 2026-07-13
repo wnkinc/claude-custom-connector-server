@@ -89,9 +89,15 @@ def serve(
     untrusted_output: bool = False,
     require_approval: bool = False,
     stateless_http: bool = False,
-    guardrail_source: str | None = None,
+    source: str | None = None,
 ) -> None:
     """Apply the shared security layers to ``mcp`` and run it (transport via env).
+
+    ``source`` is the tool's short name across the security plumbing: it scopes
+    approvals, names the sidecar catalog entry (and so the manage panel's section),
+    and tags guardrail-wrapped content. Defaults to ``mcp.name`` -- pass it
+    explicitly when the server's display name isn't the tool's name (e.g. xmcp's
+    server is called "X API MCP").
 
     ORDER MATTERS: FastMCP wraps ``reversed(middleware)``, so the first-added is the
     OUTERMOST. Approval must be outermost — it short-circuits BEFORE the tool runs, so
@@ -99,6 +105,7 @@ def serve(
     screening only results of calls the human already approved.
     """
     host = host or os.getenv("MCP_HOST", "127.0.0.1")
+    source = source or mcp.name
 
     # SECURITY POSTURE: each layer's default is this tool's serve(...) arg; a deploy
     # may flip it by env. Auth is already env-gated one layer down (build_oauth_provider
@@ -124,7 +131,7 @@ def serve(
         # (source scopes its approvals and its catalog registration).
         mcp.add_middleware(
             ApprovalMiddleware(
-                source=mcp.name,
+                source=source,
                 widget=_is_truthy(os.getenv("SPIKE_APPROVAL_WIDGET")),
             )
         )
@@ -150,7 +157,7 @@ def serve(
     if untrusted_output:
         mcp.add_middleware(
             GuardrailMiddleware(
-                source=guardrail_source or mcp.name,
+                source=source,
                 exempt=_csv_set(os.getenv("MCP_GUARDRAIL_EXEMPT")),
             )
         )
