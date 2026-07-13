@@ -249,7 +249,7 @@ ENVEOF
 {hf_fetch}
 # The deploy reconciler: applies chat-approved tool deploys (deploy/host/README.md).
 python3 deploy/host/reconcile.py --init --repo /opt/mcp-tools --user root
-sed 's|__REPO__|/opt/mcp-tools|; s|__RUN_AS__|root|' deploy/host/mcp-reconciler.service \\
+sed 's|__REPO__|/opt/mcp-tools|g; s|__RUN_AS__|root|g' deploy/host/mcp-reconciler.service \\
   > /etc/systemd/system/mcp-reconciler.service
 systemctl daemon-reload && systemctl enable --now mcp-reconciler
 
