@@ -421,8 +421,7 @@ async function save() {
     closeMenus();
     setNote(
       `Saved — enforced within ~15s; refresh the ${srcs.join(" and ")} ` +
-      `connector${srcs.length > 1 ? "s" : ""} to update Claude's tool list.${refusedNote} ` +
-      "This panel is now read-only — ask for manage_tools again to make more changes.",
+      `connector${srcs.length > 1 ? "s" : ""} to update Claude's tool list.${refusedNote}`,
       "ok",
     );
     refreshChrome();
