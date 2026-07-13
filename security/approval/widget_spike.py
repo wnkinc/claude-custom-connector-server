@@ -10,11 +10,9 @@ session-proof on web+desktop). Because the model can't make HTTP requests and th
 is no tool that flips the gate, the token is harmless in the tool result -- so it
 rides the result content and needs no forge-proof _meta plumbing.
 
-This module currently runs the RENDER TEST: does a list-injected _meta render the
-widget? approval_probe stays exempt (so it runs and returns a token-bearing payload)
-and is tagged by the middleware. If the card renders, list-injection works and we
-wire the real gated flow (approval_probe becomes gated + the middleware tags the
-whole gated set + ApprovalMiddleware carries the token on its pending result).
+The flow is proven and live (the gatekeeper's set_gating approval loop runs on it);
+the approval_probe render-test tool that validated it was removed 2026-07-13 --
+recover from git history if a harmless gated stand-in is ever needed again.
 """
 
 from __future__ import annotations
@@ -59,11 +57,6 @@ def widget_html(filename: str) -> str:
     return _html_cache[filename]
 
 
-def _extend_env_csv(name: str, *names: str) -> None:
-    have = {p.strip() for p in os.getenv(name, "").split(",") if p.strip()}
-    os.environ[name] = ",".join(sorted(have | set(names)))
-
-
 class WidgetMetaMiddleware(Middleware):
     """Tag the needs_approval tools in tools/list with the approval widget's _meta,
     so the host renders the in-chat approval card when they're called. This is the ONE
@@ -97,12 +90,6 @@ class WidgetMetaMiddleware(Middleware):
 
 
 def register_widget_spike(mcp) -> None:  # type: ignore[no-untyped-def]
-    # approval_probe is a GATED (non-exempt) tool -- a SAFE stand-in for a real gated
-    # action. Its FIRST call is short-circuited by the ApprovalMiddleware to the widget;
-    # only after you approve + reply does its body run. Guardrail-exempt so its own
-    # (trusted) result isn't wrapped.
-    _extend_env_csv("MCP_GUARDRAIL_EXEMPT", "approval_probe")
-
     uri = widget_uri(mcp.name, "approve.html")
     _csp = {"connectDomains": [b for b in [_public_base()] if b]}
     mcp.resource(
@@ -111,18 +98,6 @@ def register_widget_spike(mcp) -> None:  # type: ignore[no-untyped-def]
         mime_type="text/html;profile=mcp-app",
         meta={"csp": _csp, "ui": {"csp": _csp}},
     )(lambda: widget_html("approve.html"))
-
-    # The harmless gated TEST tool lives only on telegram (where we validate the flow);
-    # other widget-mode servers (e.g. gatekeeper) get the widget infra without it.
-    if mcp.name == "telegram":
-
-        async def approval_probe(action: str = "demo action") -> str:
-            """A harmless gated test action. The first call surfaces the in-chat approval
-            card; after you approve it and reply, this re-runs and returns the line below
-            (a real gated tool -- e.g. send_message -- would perform its action here)."""
-            return f"✅ approval_probe ran — a real gated tool would have run {action!r} here."
-
-        mcp.tool(name="approval_probe")(approval_probe)
 
     # THE one shared piece: tag the GATED tools so their pending result renders the
     # approval card -- same gated decision (baseline + live overrides) the gate uses.
