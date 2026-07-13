@@ -26,7 +26,7 @@ CATALOG = {
     "ok": True,
     "sources": {
         "telegram": {
-            "pinned": ["approval_probe"],
+            "pinned": ["send_message"],
             "tools": {
                 "get_me": {"description": "", "read_only": True, "mode": "always_allow"},
                 "get_chats": {"description": "", "read_only": True, "mode": "always_allow"},
@@ -36,7 +36,6 @@ CATALOG = {
                 "delete_message": {"description": "", "read_only": False, "mode": "blocked"},
                 "create_group": {"description": "", "read_only": False, "mode": "always_allow"},
                 "edit_message": {"description": "", "read_only": False, "mode": "always_allow"},
-                "approval_probe": {"description": "", "read_only": False, "mode": "always_allow"},
             },
         },
         "xmcp": {
