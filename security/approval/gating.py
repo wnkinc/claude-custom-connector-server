@@ -1,13 +1,26 @@
-"""Runtime gating decision: is a (source, tool) call gated, right now?
+"""Runtime tool-mode decision: what mode is a (source, tool) in, right now?
 
-The baseline is each server's static exempt list (MCP_APPROVAL_EXEMPT, from
-approval-exempt.txt) -- writes gated, vetted reads free. On top of that, the approval
-sidecar holds per-(source, tool) OVERRIDES that the gatekeeper tool edits at runtime,
-so a tool can be flipped gated<->free with no restart. The override wins.
+Every tool is in one of three MODES, and the approval SIDECAR is the sole
+authority on them -- there is no code-side allowlist:
 
-Servers fetch the overrides from the sidecar with a short TTL cache, so a change takes
-effect within a few seconds on the gate (the in-chat card follows on the next
-tools/list, which the connector caches until refreshed).
+  - "always_allow":   runs with no approval. Also the default for any tool the
+                      sidecar has no stored choice for (ship-open by design; the
+                      operator curates from there via the gatekeeper).
+  - "needs_approval": each call needs an out-of-band human approval.
+  - "blocked":        disabled by the operator -- calls refuse outright AND the
+                      tool is filtered from Claude's tools/list (invisible once
+                      the connector refreshes its cached list; the refusal is
+                      the actual gate).
+
+Servers fetch the modes from the sidecar with a short TTL cache, so a change takes
+effect within a few seconds on the gate (the in-chat card and the visible tool list
+follow on the next tools/list, which the connector caches until refreshed).
+
+Failure semantics: a fetch blip keeps the last-known modes. If NO fetch has ever
+succeeded (fresh process + sidecar down), fetch_modes returns None and mode_for
+treats everything as needs_approval -- otherwise an outage would silently unblock
+every blocked tool. Approval itself needs the sidecar too, so that state fails
+closed end-to-end.
 """
 
 from __future__ import annotations
@@ -17,30 +30,42 @@ import time
 
 import httpx
 
+MODES = ("always_allow", "needs_approval", "blocked")
+DEFAULT_MODE = "always_allow"
+
 _TTL = 15.0
-_cache: dict[str, tuple[float, dict[str, bool]]] = {}  # source -> (fetched_at, overrides)
+_cache: dict[str, tuple[float, dict[str, str]]] = {}  # source -> (fetched_at, modes)
 
 
-async def fetch_overrides(source: str, approval_url: str, timeout: float = 5.0) -> dict[str, bool]:
-    """Overrides for `source` from the sidecar, cached for _TTL seconds. On any error
-    returns the last known value (or empty), so gating never fails open on a blip."""
+def _as_mode(value) -> str:  # type: ignore[no-untyped-def]
+    """Normalize a wire value; anything unrecognized fails SAFE (needs_approval)."""
+    return value if value in MODES else "needs_approval"
+
+
+async def fetch_modes(
+    source: str, approval_url: str, timeout: float = 5.0
+) -> dict[str, str] | None:
+    """Tool modes for `source` from the sidecar, cached for _TTL seconds. On error
+    returns the last-known value; None only if no fetch has EVER succeeded."""
     now = time.monotonic()
     hit = _cache.get(source)
     if hit and now - hit[0] < _TTL:
         return hit[1]
-    data: dict[str, bool] = hit[1] if hit else {}
-    # A fetch blip must never change gating -> keep last-known (or empty) on any error.
     with contextlib.suppress(Exception):
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(f"{approval_url.rstrip('/')}/gating", params={"source": source})
-        data = {k: bool(v) for k, v in (resp.json().get("overrides") or {}).items()}
-    _cache[source] = (now, data)
-    return data
+        data = {k: _as_mode(v) for k, v in (resp.json().get("modes") or {}).items()}
+        _cache[source] = (now, data)
+        return data
+    if hit:  # blip: keep (and re-stamp) last-known so a down sidecar isn't re-polled per call
+        _cache[source] = (now, hit[1])
+        return hit[1]
+    return None  # nothing ever fetched -> callers fail closed
 
 
-def is_gated(tool: str, baseline_exempt: set[str], overrides: dict[str, bool]) -> bool:
-    """True if `tool` needs approval. A runtime override wins; else the baseline
-    (gated unless the tool is on the exempt allowlist)."""
-    if tool in overrides:
-        return overrides[tool]
-    return tool not in baseline_exempt
+def mode_for(tool: str, modes: dict[str, str] | None) -> str:
+    """The mode `tool` is in. No stored choice -> always_allow; modes=None (the
+    sidecar has never answered this process) -> needs_approval, failing closed."""
+    if modes is None:
+        return "needs_approval"
+    return modes.get(tool, DEFAULT_MODE)

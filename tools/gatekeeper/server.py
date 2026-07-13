@@ -1,82 +1,77 @@
-"""Gatekeeper: flip any telegram tool's approval requirement from chat.
+"""Gatekeeper: the operator's control plane over every tool's mode.
 
-A tiny control plane over the approval sidecar's runtime gating config
-(security/approval/gating.py). Two tools:
+The approval sidecar is the sole authority on tool modes (see
+security/approval/gating.py): each approval-enabled server registers its full tool
+catalog there, every tool defaults to always_allow, and the operator's choices are
+stored per (source, tool). Two tools:
 
-  - list_gating()                       -- read-only, exempt: show the current overrides.
-  - set_gating(tool, requires_approval) -- GATED: change whether a telegram tool needs
-        approval. Because changing a safety gate is itself sensitive, this call is gated
-        -- flipping a gate requires a human approval in the card (recursively safe).
-
-MVP: telegram only (TARGET_SOURCE). The sidecar holds the config; the telegram server
-reads it live, so a change takes effect within seconds (the in-chat cards follow on the
-next connector refresh).
+  - manage_tools()  -- the in-chat permissions panel (a widget, one section per
+        connector; see security/approval/manage_widget.py). The human review-and-save
+        surface; nothing changes until they click Save.
+  - set_gating(tool, mode, source) -- the conversational path: set one tool's mode:
+        always_allow   -- runs with no approval card
+        needs_approval -- each call needs a human approval
+        blocked        -- disabled: calls refuse outright AND the tool is filtered
+                          from Claude's tools/list (invisible once the connector
+                          refreshes its cached list; the refusal is immediate)
+    set_gating itself is PINNED to needs_approval in the sidecar (a code constant,
+    not stored state): changing a safety gate always takes a human approval, and no
+    runtime path can lift that.
 """
 
 import os
 import sys
 from pathlib import Path
+from typing import Literal
 
 import httpx
 from fastmcp import FastMCP
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from security.approval.manage_widget import register_manage_widget  # noqa: E402
 from security.serve import serve  # noqa: E402
 
 mcp = FastMCP(name="gatekeeper")
 
 APPROVAL_URL = os.getenv("APPROVAL_URL", "http://approval:8072").rstrip("/")
-TARGET_SOURCE = "telegram"  # MVP: this control plane manages the telegram server only
 
 
 @mcp.tool
-async def list_gating() -> str:
-    """Show which telegram tools have been flipped to run freely vs. require approval.
+async def set_gating(
+    tool: str,
+    mode: Literal["always_allow", "needs_approval", "blocked"],
+    source: str = "telegram",
+) -> str:
+    """Set a tool's mode on `source`: 'always_allow' runs with no approval card,
+    'needs_approval' needs a human approval per call, 'blocked' disables the tool
+    outright (calls refuse immediately, and it disappears from Claude's tool list
+    once the connector refreshes).
 
-    Read-only. A tool with no override follows its built-in default (writes require
-    approval, vetted read-only tools run freely)."""
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(f"{APPROVAL_URL}/gating", params={"source": TARGET_SOURCE})
-    overrides = resp.json().get("overrides", {})
-    if not overrides:
-        return (
-            "No approval overrides set on telegram. Every tool follows its default: "
-            "writes require approval, vetted read-only tools run freely."
-        )
-    lines = [
-        f"  - {tool}: {'requires approval' if req else 'runs freely (no approval)'}"
-        for tool, req in sorted(overrides.items())
-    ]
-    return "Telegram approval overrides:\n" + "\n".join(lines)
-
-
-@mcp.tool
-async def set_gating(tool: str, requires_approval: bool) -> str:
-    """Flip whether a telegram tool requires approval.
-
-    requires_approval=False makes the tool run freely (no approval card); True restores
-    the gate. Changing a gate is itself gated, so this call needs your approval first.
-    After it applies, refresh the telegram connector so its cards update."""
+    Changing a gate is itself gated, so this call needs your approval first. After it
+    applies, refresh the `source` connector so its cards and tool list update."""
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
             f"{APPROVAL_URL}/gating",
-            json={"source": TARGET_SOURCE, "tool": tool, "requires_approval": requires_approval},
+            json={"source": source, "tool": tool, "mode": mode},
         )
-    ok = resp.json().get("ok")
-    state = "REQUIRES APPROVAL" if requires_approval else "RUNS FREELY (no approval)"
-    if not ok:
-        return f"⚠️ Failed to update gating for `{tool}`."
+    data = resp.json()
+    if not data.get("ok"):
+        return (
+            f"⚠️ Mode change refused for `{tool}` on {source}: {data.get('error', 'unknown error')}."
+        )
     return (
-        f"✅ `{tool}` on telegram now {state}. Takes effect within a few seconds; "
-        "refresh the telegram connector to update its in-chat cards."
+        f"✅ `{tool}` on {source} is now {mode}. Enforcement takes effect within a "
+        f"few seconds; refresh the {source} connector to update its in-chat cards "
+        "and visible tool list."
     )
 
 
 def main() -> None:
     port = int(os.getenv("MCP_PORT", "8065"))
-    # list_gating is read-only (exempt); set_gating is GATED -- changing a gate needs a
-    # human approval, shown via the in-chat widget (SPIKE_APPROVAL_WIDGET).
-    os.environ.setdefault("MCP_APPROVAL_EXEMPT", "list_gating")
+    # The in-chat permissions panel (manage_tools + its ui:// resource).
+    register_manage_widget(mcp)
+    # Tools default to always_allow like everything else -- EXCEPT set_gating,
+    # which the sidecar pins to needs_approval (see _PINNED in its service.py).
     serve(mcp, port=port, require_approval=True)
 
 

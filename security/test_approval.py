@@ -27,6 +27,7 @@ _SPEC = importlib.util.spec_from_file_location(
 svc = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(svc)
 
+from security.approval import gating as gating_mod  # noqa: E402
 from security.approval.middleware import ApprovalMiddleware  # noqa: E402
 
 PUBLIC = "https://approval.example.com"
@@ -35,6 +36,10 @@ PUBLIC = "https://approval.example.com"
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
     svc._PENDING.clear()
+    svc._STATE.clear()
+    svc._MANAGE.clear()
+    gating_mod._cache.clear()  # the TTL cache must not leak modes across tests
+    monkeypatch.delenv("APPROVAL_STATE_FILE", raising=False)  # memory-only in tests
     monkeypatch.setenv("APPROVAL_PUBLIC_URL", PUBLIC)
     # Slack off by default: gate still creates approvals but reports notified=False
     # (Slack is the only human channel now -- the chat never gets a link).
@@ -398,7 +403,13 @@ def test_healthz_channel_follows_telegram(telegram_env, monkeypatch):
 # --- the middleware, end-to-end against the real service app -------------------------
 
 
-def _middleware_against_service(monkeypatch, **kwargs):
+def _set_mode(client, tool, mode, source="teltool"):
+    return client.post("/gating", json={"source": source, "tool": tool, "mode": mode})
+
+
+def _middleware_against_service(monkeypatch, gated=("send_message",), **kwargs):
+    """Middleware wired to the in-process service; `gated` tools get needs_approval
+    set up front (nothing is gated by default anymore)."""
     mw = ApprovalMiddleware(approval_url="http://approval.test", source="teltool", **kwargs)
     import security.approval.middleware as mwmod
 
@@ -408,7 +419,12 @@ def _middleware_against_service(monkeypatch, **kwargs):
         kw.pop("timeout", None)
         return real_client(transport=httpx.ASGITransport(app=svc.app), **kw)
 
+    # Both the middleware's own calls (/gate, /catalog) and the gating module's
+    # mode fetches (/gating) must reach the in-process service.
     monkeypatch.setattr(mwmod.httpx, "AsyncClient", asgi_client)
+    monkeypatch.setattr(gating_mod.httpx, "AsyncClient", asgi_client)
+    for tool in gated:
+        _set_mode(TestClient(svc.app), tool, "needs_approval")
     return mw
 
 
@@ -479,19 +495,331 @@ def test_middleware_reports_denial(slack_ok, monkeypatch):
     assert "denied" in out.content[0].text
 
 
-def test_middleware_exempt_tools_never_touch_the_service(monkeypatch):
-    mw = _middleware_against_service(monkeypatch, exempt={"get_me"})
-
-    def boom(**kw):  # any HTTP attempt = failure
-        raise AssertionError("exempt tool contacted the approval service")
-
-    import security.approval.middleware as mwmod
-
-    monkeypatch.setattr(mwmod.httpx, "AsyncClient", boom)
+def test_middleware_default_tool_runs_without_gate(monkeypatch):
+    # No stored mode -> always_allow: the tool runs and no approval is ever created.
+    mw = _middleware_against_service(monkeypatch)
     assert asyncio.run(mw.on_call_tool(_ctx(tool="get_me"), _ran)) == "TOOL-RAN"
+    assert svc._PENDING == {}
 
 
 def test_middleware_fails_closed_when_service_unreachable():
+    # Never-answered sidecar: everything is needs_approval, and the gate itself
+    # can't be reached either -- so nothing runs. An outage must not ship-open.
     mw = ApprovalMiddleware(approval_url="http://127.0.0.1:9", source="t", timeout=0.5)
     out = asyncio.run(mw.on_call_tool(_ctx(), _ran))
     assert "failing CLOSED" in out.content[0].text and "NOT performed" in out.content[0].text
+
+
+# --- tool modes: the sidecar as sole authority ----------------------------------------
+
+
+def test_gating_stores_and_returns_modes():
+    c = TestClient(svc.app)
+    for tool, mode in [("a", "always_allow"), ("b", "needs_approval"), ("c", "blocked")]:
+        assert _set_mode(c, tool, mode).json()["ok"] is True
+    got = c.get("/gating", params={"source": "teltool"}).json()
+    assert got["modes"] == {"a": "always_allow", "b": "needs_approval", "c": "blocked"}
+    # Scoped per source: another source sees nothing.
+    assert c.get("/gating", params={"source": "other"}).json()["modes"] == {}
+
+
+def test_gating_rejects_unknown_mode():
+    c = TestClient(svc.app)
+    assert _set_mode(c, "a", "sideways").status_code == 400
+    assert c.get("/gating", params={"source": "teltool"}).json()["modes"] == {}
+
+
+def test_gating_pins_are_reported_and_immutable():
+    # set_gating on the gatekeeper is a code constant: always reported as
+    # needs_approval, and no POST can change it.
+    c = TestClient(svc.app)
+    assert c.get("/gating", params={"source": "gatekeeper"}).json()["modes"] == {
+        "set_gating": "needs_approval"
+    }
+    resp = _set_mode(c, "set_gating", "always_allow", source="gatekeeper")
+    assert resp.status_code == 403 and "pinned" in resp.json()["error"]
+    assert c.get("/gating", params={"source": "gatekeeper"}).json()["modes"] == {
+        "set_gating": "needs_approval"
+    }
+
+
+def test_mode_for_defaults_open_but_fails_closed_on_no_data():
+    assert gating_mod.mode_for("anything", {}) == "always_allow"  # ship-open default
+    assert gating_mod.mode_for("x", {"x": "blocked"}) == "blocked"
+    assert gating_mod.mode_for("anything", None) == "needs_approval"  # sidecar never answered
+
+
+def test_fetch_modes_normalizes_unknown_values(monkeypatch):
+    # Corrupt/stale stored values must fail SAFE (needs_approval), never open.
+    svc._STATE["teltool"] = {"catalog": {}, "modes": {"a": "blocked", "b": "bogus"}}
+    _middleware_against_service(monkeypatch, gated=())
+    got = asyncio.run(gating_mod.fetch_modes("teltool", "http://approval.test"))
+    assert got == {"a": "blocked", "b": "needs_approval"}
+
+
+def test_state_persists_across_restart(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPROVAL_STATE_FILE", str(tmp_path / "state.json"))
+    c = TestClient(svc.app)
+    c.post(
+        "/catalog",
+        json={"source": "teltool", "tools": [{"name": "send_message", "read_only": False}]},
+    )
+    _set_mode(c, "send_message", "blocked")
+    svc._STATE.clear()  # simulate a sidecar restart
+    svc._load_state()
+    assert c.get("/gating", params={"source": "teltool"}).json()["modes"] == {
+        "send_message": "blocked"
+    }
+    assert "send_message" in c.get("/catalog", params={"source": "teltool"}).json()["tools"]
+
+
+def test_middleware_blocked_tool_refuses_without_approval_path(monkeypatch):
+    # Blocked = disabled outright: a stale client tool list must not be able to run
+    # it, and no approval is created (there is nothing to approve).
+    mw = _middleware_against_service(monkeypatch, gated=())
+    _set_mode(TestClient(svc.app), "send_message", "blocked")
+    text = asyncio.run(mw.on_call_tool(_ctx(), _ran)).content[0].text
+    assert "disabled" in text and "not performed" in text
+    assert "http" not in text  # same no-link/no-directive rule as pending messages
+    assert svc._PENDING == {}
+
+
+# --- the tool list: catalog registration + blocked filtering --------------------------
+
+
+def _tool(name, read_only=False):
+    # read_only=None models a tool with NO annotations (grouped as "Other tools").
+    return SimpleNamespace(
+        name=name,
+        description=f"{name} does things",
+        annotations=None if read_only is None else SimpleNamespace(readOnlyHint=read_only),
+    )
+
+
+async def _list_via(mw, tools):
+    async def _inner(_ctx):
+        return tools
+
+    return await mw.on_list_tools(None, _inner)
+
+
+def test_middleware_list_filters_blocked_tools(monkeypatch):
+    mw = _middleware_against_service(monkeypatch, gated=())
+    _set_mode(TestClient(svc.app), "send_message", "blocked")
+    out = asyncio.run(_list_via(mw, [_tool("send_message"), _tool("get_me", read_only=True)]))
+    assert [t.name for t in out] == ["get_me"]
+
+
+def test_middleware_list_registers_the_full_catalog(monkeypatch):
+    # The catalog is the operator's UNFILTERED view: blocked tools are registered
+    # too, with their read/write classification and effective mode.
+    mw = _middleware_against_service(monkeypatch, gated=())
+    _set_mode(TestClient(svc.app), "send_message", "blocked")
+    asyncio.run(
+        _list_via(
+            mw,
+            [
+                _tool("send_message"),
+                _tool("get_me", read_only=True),
+                _tool("probe", read_only=None),
+            ],
+        )
+    )
+    tools = TestClient(svc.app).get("/catalog", params={"source": "teltool"}).json()["tools"]
+    assert tools["send_message"] == {
+        "description": "send_message does things",
+        "read_only": False,
+        "mode": "blocked",
+    }
+    assert tools["get_me"]["read_only"] is True and tools["get_me"]["mode"] == "always_allow"
+    # No annotations -> tri-state None, which the widget groups as "Other tools".
+    assert tools["probe"]["read_only"] is None
+
+
+def test_middleware_list_survives_a_down_sidecar():
+    # No sidecar ever answered: the list passes through unfiltered (nothing is
+    # known to be blocked) -- the call path is what fails closed.
+    mw = ApprovalMiddleware(approval_url="http://127.0.0.1:9", source="t", timeout=0.5)
+    out = asyncio.run(_list_via(mw, [_tool("send_message")]))
+    assert [t.name for t in out] == ["send_message"]
+
+
+# --- manage sessions: the permissions widget's capability API -------------------------
+
+
+def _mint(client):
+    return client.post("/manage", json={}).json()["token"]
+
+
+def test_manage_session_serves_every_registered_connector():
+    c = TestClient(svc.app)
+    c.post(
+        "/catalog",
+        json={
+            "source": "teltool",
+            "tools": [
+                {"name": "send_message", "read_only": False, "description": "d"},
+                {"name": "get_me", "read_only": True},
+            ],
+        },
+    )
+    c.post("/catalog", json={"source": "gatekeeper", "tools": [{"name": "set_gating"}]})
+    _set_mode(c, "send_message", "blocked")
+    r = c.get(f"/manage/{_mint(c)}")
+    # The widget iframe reads this cross-origin: CORS must be open (token = credential).
+    assert r.headers["access-control-allow-origin"] == "*"
+    sources = r.json()["sources"]
+    assert sources["teltool"]["tools"]["send_message"] == {
+        "description": "d",
+        "read_only": False,
+        "mode": "blocked",
+    }
+    assert sources["teltool"]["tools"]["get_me"]["mode"] == "always_allow"
+    assert sources["teltool"]["pinned"] == []
+    # The gatekeeper is a connector like any other, with its code pin surfaced.
+    assert sources["gatekeeper"]["pinned"] == ["set_gating"]
+    assert sources["gatekeeper"]["tools"]["set_gating"]["mode"] == "needs_approval"
+
+
+def test_manage_save_applies_persists_and_allows_resave(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPROVAL_STATE_FILE", str(tmp_path / "s.json"))
+    c = TestClient(svc.app)
+    token = _mint(c)
+    r = c.post(
+        f"/manage/{token}",
+        json={
+            "changes": {
+                "teltool": {"send_message": "blocked"},
+                "othertool": {"get_me": "needs_approval"},
+            }
+        },
+    ).json()
+    assert r["applied"] == 2 and r["refused"] == {}
+    # A widget save is a first-class choice: enforced via /gating and restart-proof.
+    svc._STATE.clear()
+    svc._load_state()
+    assert c.get("/gating", params={"source": "teltool"}).json()["modes"] == {
+        "send_message": "blocked"
+    }
+    assert c.get("/gating", params={"source": "othertool"}).json()["modes"] == {
+        "get_me": "needs_approval"
+    }
+    # The same session token allows further saves while alive.
+    again = c.post(
+        f"/manage/{token}", json={"changes": {"teltool": {"send_message": "always_allow"}}}
+    ).json()
+    assert again["ok"] is True and again["applied"] == 1
+
+
+def test_manage_save_respects_pins_and_validates_modes():
+    c = TestClient(svc.app)
+    r = c.post(
+        f"/manage/{_mint(c)}",
+        json={"changes": {"gatekeeper": {"set_gating": "always_allow"}}},
+    ).json()
+    # The widget cannot unpin set_gating any more than the tool can.
+    assert r["applied"] == 0 and r["refused"] == {"gatekeeper": ["set_gating"]}
+    assert c.get("/gating", params={"source": "gatekeeper"}).json()["modes"] == {
+        "set_gating": "needs_approval"
+    }
+    bad = c.post(f"/manage/{_mint(c)}", json={"changes": {"teltool": {"a": "sideways"}}})
+    assert bad.status_code == 400
+
+
+def test_manage_token_expires_and_unknown_is_404():
+    c = TestClient(svc.app)
+    token = _mint(c)
+    svc._MANAGE[token]["created"] -= svc._TTL_SECONDS + 1
+    assert c.get(f"/manage/{token}").status_code == 404
+    assert c.post("/manage/nope", json={"changes": {}}).status_code == 404
+
+
+def test_manage_preflight_is_answered():
+    r = TestClient(svc.app).options("/manage/whatever")
+    assert r.status_code == 204
+    assert r.headers["access-control-allow-methods"] == "GET, POST, OPTIONS"
+    assert r.headers["access-control-allow-headers"] == "content-type"
+
+
+# --- the gatekeeper manage_tools wrapper (server side of the widget) ------------------
+
+import security.approval.manage_widget as mgmt  # noqa: E402
+
+
+class _FakeMCP:
+    """Minimal stand-in exposing only what register_manage_widget touches, so the
+    decorated manage_tools closure and the resource registration are captured for
+    direct testing -- no FastMCP internals, no browser."""
+
+    name = "gatekeeper"
+
+    def __init__(self):
+        self.resources = {}  # uri -> handler
+        self.tools = {}  # name -> async fn
+        self.tool_meta = None
+
+    def resource(self, uri, **kwargs):
+        def deco(fn):
+            self.resources[uri] = fn
+            return fn
+
+        return deco
+
+    def tool(self, *args, **kwargs):
+        self.tool_meta = kwargs.get("meta")
+
+        def deco(fn):
+            self.tools[fn.__name__] = fn
+            return fn
+
+        return deco
+
+
+def _register_manage(monkeypatch, working=True):
+    monkeypatch.setenv("APPROVAL_URL", "http://approval.test")
+    fake = _FakeMCP()
+    mgmt.register_manage_widget(fake)
+    if working:
+        real = httpx.AsyncClient
+
+        def asgi(**kw):
+            kw.pop("timeout", None)
+            return real(transport=httpx.ASGITransport(app=svc.app), **kw)
+
+        monkeypatch.setattr(mgmt.httpx, "AsyncClient", asgi)
+    else:
+
+        def boom(**kw):
+            raise RuntimeError("sidecar unreachable")
+
+        monkeypatch.setattr(mgmt.httpx, "AsyncClient", boom)
+    return fake
+
+
+def test_manage_tools_returns_a_redeemable_marker(monkeypatch):
+    fake = _register_manage(monkeypatch)
+    text = asyncio.run(fake.tools["manage_tools"]())
+    marker = re.search(r"<!--MANAGE\s+(\{.*?\})\s*-->", text)
+    assert marker, "manage_tools must emit the widget marker"
+    token = json.loads(marker.group(1))["token"]
+    # The token it minted actually works against the sidecar the widget will call.
+    assert TestClient(svc.app).get(f"/manage/{token}").json()["ok"] is True
+    # No approval-shaped directives/links leak into the model-facing prose.
+    assert "http" not in text
+
+
+def test_manage_tools_fails_soft_when_sidecar_down(monkeypatch):
+    fake = _register_manage(monkeypatch, working=False)
+    text = asyncio.run(fake.tools["manage_tools"]())
+    assert "could not be opened" in text and "Nothing was changed" in text
+    assert "<!--MANAGE" not in text  # no token, no card to render
+
+
+def test_register_manage_widget_wires_the_ui_resource(monkeypatch):
+    fake = _register_manage(monkeypatch)
+    # The tool is tagged with the ui:// resource so the host renders the panel,
+    # and that exact resource is registered (served HTML, not a dangling URI).
+    uri = fake.tool_meta["ui"]["resourceUri"]
+    assert uri.startswith("ui://manage.gatekeeper.")
+    assert uri in fake.resources
+    assert "Tool permissions" in fake.resources[uri]()  # the widget HTML

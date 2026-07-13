@@ -26,38 +26,37 @@ from pathlib import Path
 
 from fastmcp.server.middleware import Middleware
 
-from security.approval.gating import fetch_overrides, is_gated
+from security.approval.gating import fetch_modes, mode_for
 
 _WIDGETS = Path(__file__).resolve().parent / "widgets"
-_html_cache: str | None = None
+_html_cache: dict[str, str] = {}
 
 
-def _widget_uri(source: str) -> str:
+def widget_uri(source: str, filename: str) -> str:
     # Per-SOURCE + content-hashed URI. The source keeps each connector's widget URI
     # distinct (the host associates a ui:// URI with one connector -- a shared URI
     # renders only on the first one, so the gatekeeper's card wouldn't show while
     # telegram's did). The hash busts the connector's per-URI resource cache on any
     # widget change.
-    h = hashlib.sha1(_widget_html().encode()).hexdigest()[:10]  # noqa: S324 - cache-bust, not security
-    return f"ui://approve.{source}.{h}.html"
+    h = hashlib.sha1(widget_html(filename).encode()).hexdigest()[:10]  # noqa: S324 - cache-bust, not security
+    return f"ui://{Path(filename).stem}.{source}.{h}.html"
 
 
 def _public_base() -> str:
     return os.getenv("APPROVAL_PUBLIC_URL", "").rstrip("/")
 
 
-def _widget_html() -> str:
-    global _html_cache
-    if _html_cache is None:
-        html = (_WIDGETS / "approve.html").read_text()
+def widget_html(filename: str) -> str:
+    if filename not in _html_cache:
+        html = (_WIDGETS / filename).read_text()
         html = html.replace(
             "/*__EXT_APPS_BUNDLE__*/", (_WIDGETS / "ext-apps-bundle.js").read_text()
         )
-        # Bake the fixed sidecar origin into the widget (the token is per-call and comes
+        # Bake the fixed sidecar origin into the widget (per-call data like tokens comes
         # via the tool result; the base URL is constant, so it need not travel in content).
         html = html.replace("__APPROVAL_PUBLIC_BASE__", _public_base())
-        _html_cache = html
-    return _html_cache
+        _html_cache[filename] = html
+    return _html_cache[filename]
 
 
 def _extend_env_csv(name: str, *names: str) -> None:
@@ -65,15 +64,11 @@ def _extend_env_csv(name: str, *names: str) -> None:
     os.environ[name] = ",".join(sorted(have | set(names)))
 
 
-def _approval_exempt() -> set[str]:
-    return {p.strip() for p in os.getenv("MCP_APPROVAL_EXEMPT", "").split(",") if p.strip()}
-
-
 class WidgetMetaMiddleware(Middleware):
-    """Tag the GATED (non-exempt) tools in tools/list with the approval widget's _meta,
+    """Tag the needs_approval tools in tools/list with the approval widget's _meta,
     so the host renders the in-chat approval card when they're called. This is the ONE
-    place that decides which tools show the card -- driven by the same exempt list that
-    already decides which tools need approval. No per-tool code."""
+    place that decides which tools show the card -- driven by the same sidecar modes
+    that decide which tools need approval. No per-tool code."""
 
     def __init__(self, uri: str, source: str, approval_url: str) -> None:
         self._uri = uri
@@ -82,14 +77,17 @@ class WidgetMetaMiddleware(Middleware):
 
     async def on_list_tools(self, context, call_next):  # type: ignore[no-untyped-def]
         tools = await call_next(context)
-        # Same gated decision the ApprovalMiddleware uses (baseline exempt + live
-        # sidecar overrides), so the card and the gate always agree on a tool.
-        baseline = _approval_exempt()
-        overrides = await fetch_overrides(self._source, self._approval_url)
+        # Same mode decision the ApprovalMiddleware uses (live sidecar modes), so the
+        # card and the gate always agree on a tool.
+        modes = await fetch_modes(self._source, self._approval_url)
         meta = {"ui": {"resourceUri": self._uri}, "ui/resourceUri": self._uri}
         out = []
         for t in tools:
-            if is_gated(t.name, baseline, overrides):
+            # Only needs_approval gets the card; blocked tools were already filtered
+            # out by the (inner) ApprovalMiddleware's on_list_tools before this runs.
+            # modes=None (sidecar never answered) tags nothing -- cosmetic only; the
+            # gate itself fails closed.
+            if modes is not None and mode_for(t.name, modes) == "needs_approval":
                 merged = {**(getattr(t, "meta", None) or {}), **meta}
                 # Best-effort tag; if the Tool isn't a copyable pydantic model, leave it.
                 with contextlib.suppress(Exception):
@@ -105,14 +103,14 @@ def register_widget_spike(mcp) -> None:  # type: ignore[no-untyped-def]
     # (trusted) result isn't wrapped.
     _extend_env_csv("MCP_GUARDRAIL_EXEMPT", "approval_probe")
 
-    uri = _widget_uri(mcp.name)
+    uri = widget_uri(mcp.name, "approve.html")
     _csp = {"connectDomains": [b for b in [_public_base()] if b]}
     mcp.resource(
         uri,
         name="Approval widget",
         mime_type="text/html;profile=mcp-app",
         meta={"csp": _csp, "ui": {"csp": _csp}},
-    )(lambda: _widget_html())
+    )(lambda: widget_html("approve.html"))
 
     # The harmless gated TEST tool lives only on telegram (where we validate the flow);
     # other widget-mode servers (e.g. gatekeeper) get the widget infra without it.

@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  /* Same transparent, host-theme-following conventions as approve.html (see its
+     header comment for why data-theme + inline color-scheme matter). Layout
+     replicates Claude's connector tool-permissions screen: grouped collapsible
+     sections, hairline rows, and a 3-segment sliding control per tool. */
+  :root {
+    --ink:#1c1c1a; --ink-2:#6e6c64; --muted:#9c9a92;
+    --border:rgba(0,0,0,0.09); --tint:rgba(0,0,0,0.035);
+    --thumb:#ffffff; --thumb-border:rgba(0,0,0,0.10);
+    --accent:#c96442; --accent-hover:#b5573a; --accent-ink:#fffdfa;
+    --ok:#1a7f37; --no:#b3261e; color-scheme:light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --ink:#ededeb; --ink-2:#a8a79f; --muted:#807f78;
+      --border:rgba(255,255,255,0.11); --tint:rgba(255,255,255,0.05);
+      --thumb:rgba(255,255,255,0.12); --thumb-border:rgba(255,255,255,0.14);
+      --accent:#c96442; --accent-hover:#d97757; --accent-ink:#fffdfa;
+      --ok:#5bb96a; --no:#e5645c; color-scheme:dark; }
+  }
+  :root[data-theme="dark"] { --ink:#ededeb; --ink-2:#a8a79f; --muted:#807f78;
+    --border:rgba(255,255,255,0.11); --tint:rgba(255,255,255,0.05);
+    --thumb:rgba(255,255,255,0.12); --thumb-border:rgba(255,255,255,0.14);
+    --accent:#c96442; --accent-hover:#d97757; --accent-ink:#fffdfa;
+    --ok:#5bb96a; --no:#e5645c; color-scheme:dark; }
+  html,body{margin:0;background:transparent}
+  body{font:13.5px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);padding:0}
+  .card{border:1px solid var(--border);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+  .lead{padding:14px 16px 6px}
+  .title{font-weight:600;font-size:14px}
+  .sub{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .groups{overflow-y:auto;max-height:380px;padding:0 16px}
+  /* connector section (one per source: telegram, xmcp, ...) */
+  .shead{display:flex;align-items:center;padding:12px 0 4px}
+  .stoggle{display:flex;align-items:center;gap:9px;flex:1;min-width:0;background:none;border:0;
+    padding:0;font:inherit;color:var(--ink);cursor:pointer;text-align:left}
+  .sava{width:20px;height:20px;flex:none;display:flex;align-items:center;justify-content:center;
+    font-size:11px;color:var(--ink-2);background:var(--thumb);border:1px solid var(--border);
+    border-radius:6px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  .sname{font-weight:600;font-size:13.5px}
+  /* group header row */
+  .ghead{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)}
+  .gtoggle{display:flex;align-items:center;gap:10px;flex:1;min-width:0;background:none;border:0;
+    padding:0;font:inherit;color:var(--ink);cursor:pointer;text-align:left}
+  .chev{color:var(--muted);transition:transform .2s;flex:none;display:flex}
+  .collapsed > .ghead > .gtoggle .chev, .srcsec.collapsed > .shead .chev{transform:rotate(-90deg)}
+  .count{flex:none;font-size:11px;color:var(--ink-2);background:var(--tint);border-radius:999px;padding:1px 8px}
+  /* group blanket button */
+  .blanket{position:relative;flex:none}
+  .blanket>button{font:inherit;font-size:12px;color:var(--ink);background:var(--tint);border:0;
+    border-radius:7px;padding:4px 10px;cursor:pointer;display:flex;align-items:center;gap:6px}
+  .blanket>button:hover{background:var(--border)}
+  .blanket .bicon{display:flex;color:var(--ink-2)}
+  .blanket .bicon:empty{display:none}
+  .menu{position:absolute;right:0;top:calc(100% + 4px);z-index:5;min-width:160px;
+    background:Canvas;border:1px solid var(--border);border-radius:9px;padding:4px;
+    box-shadow:0 4px 16px rgba(0,0,0,.14)}
+  .menu button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;font:inherit;
+    font-size:12.5px;color:var(--ink);background:none;border:0;border-radius:6px;
+    padding:6px 9px;cursor:pointer}
+  .menu button:hover{background:var(--tint)}
+  .menu .micon{display:flex;color:var(--ink-2)}
+  /* tool rows */
+  .row{display:flex;align-items:center;gap:14px;min-height:44px;padding:4px 0 4px 24px;
+    border-bottom:1px solid var(--border)}
+  .rows > .row:last-child{border-bottom:0}
+  .tname{flex:1;min-width:0;font-size:13px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row.dirty .tname{color:var(--ink)}
+  /* 3-segment sliding control (values: always_allow / needs_approval / blocked) */
+  .seg{position:relative;flex:none;display:inline-flex;padding:1px;border-radius:8px;background:var(--tint)}
+  .seg .sthumb{position:absolute;top:1px;bottom:1px;width:30px;border-radius:7px;background:var(--thumb);
+    box-shadow:inset 0 0 0 1px var(--thumb-border),0 1px 2px rgba(0,0,0,.05);
+    transition:transform .15s ease;pointer-events:none}
+  .seg button{position:relative;z-index:1;width:30px;height:26px;display:flex;align-items:center;
+    justify-content:center;background:none;border:0;border-radius:7px;color:var(--muted);cursor:pointer;padding:0}
+  .seg button:hover{color:var(--ink)}
+  .seg button[aria-checked="true"]{color:var(--ink)}
+  .seg.pinned{opacity:.55}
+  .seg.pinned button{cursor:default}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  /* save bar */
+  .savebar{display:flex;align-items:center;gap:10px;padding:10px 16px;border-top:1px solid var(--border)}
+  .note{flex:1;font-size:12px;color:var(--ink-2)}
+  .note.err{color:var(--no)}
+  /* saved note: only the glyph carries color, the words stay in the normal ink */
+  .note .nglyph{color:var(--ok)}
+  .save{font:inherit;font-weight:500;padding:7px 16px;border-radius:8px;border:0;cursor:pointer;
+    background:var(--accent);color:var(--accent-ink);transition:background .1s}
+  .save:hover:enabled{background:var(--accent-hover)}
+  .save:disabled{opacity:.45;cursor:default}
+  .fullnote{padding:14px 16px;font-size:12.5px;color:var(--ink-2)}
+  details{border-top:1px solid var(--border)}
+  summary{cursor:pointer;color:var(--muted);font-size:11px;padding:8px 16px;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  #diag{font-family:ui-monospace,monospace;font-size:11px;white-space:pre-wrap;color:var(--muted);
+    padding:0 16px 10px;max-height:160px;overflow-y:auto}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<script>
+  window.diag = (m) => { const d=document.getElementById("diag"); if(d) d.textContent += m+"\n"; };
+  ["error","unhandledrejection"].forEach((k)=>addEventListener(k,(e)=>diag("PAGE ERROR: "+(e.reason?.message??e.reason??e.message??k))));
+</script>
+<div class="card" id="card" hidden>
+  <div class="lead">
+    <div class="title">Tool permissions</div>
+    <div class="sub" id="sub">Server-enforced approval gates.</div>
+  </div>
+  <div class="fullnote" id="fullnote" hidden></div>
+  <div class="groups" id="groups"></div>
+  <div class="savebar" id="savebar" hidden>
+    <div class="note" id="note"></div>
+    <button class="save" id="save" type="button" disabled>Save</button>
+  </div>
+  <details>
+    <summary>diagnostics</summary>
+    <div id="diag"></div>
+  </details>
+</div>
+<script type="module">
+/*__EXT_APPS_BUNDLE__*/
+</script>
+<script type="module">
+const { App, applyDocumentTheme } = globalThis.ExtApps;
+const $ = (id) => document.getElementById(id);
+const PUBLIC_BASE = "__APPROVAL_PUBLIC_BASE__";  // baked in by the resource handler
+
+let curTheme = null;
+const applyTheme = (t) => {
+  if ((t === "dark" || t === "light") && t !== curTheme) { curTheme = t; applyDocumentTheme(t); }
+};
+
+const MODES = ["always_allow", "needs_approval", "blocked"];
+const MODE_LABEL = { always_allow: "Always allow", needs_approval: "Needs approval", blocked: "Blocked" };
+// Light-stroke glyphs matching Claude's set (its icon font is private): circle-check /
+// raised palm ("ask first") / circle-slash. Lucide outlines (ISC license).
+const icon = (paths, size = 15) =>
+  `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const ICON_PATHS = {
+  always_allow: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  needs_approval:
+    '<path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v2"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
+  blocked: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+};
+const ICONS = Object.fromEntries(MODES.map((m) => [m, icon(ICON_PATHS[m])]));
+const SMALL_ICONS = Object.fromEntries(MODES.map((m) => [m, icon(ICON_PATHS[m], 13)]));
+const CHEV = '<svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M16.134 6.16a.5.5 0 1 1 .732.68l-6.5 7-.077.068a.5.5 0 0 1-.655-.068l-6.5-7-.062-.08a.5.5 0 0 1 .718-.667l.076.067L10 12.767z"/></svg>';
+
+// snake_case AND camelCase tool names -> display names ("send_message", "createPost")
+const titleCase = (name) =>
+  name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[_\s]+/)
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+
+const SEP = "\u001f";  // keys span connectors; a char no tool/source name contains
+const K = (src, tool) => src + SEP + tool;
+let ctx = null;          // {token}
+let base = {};           // K(src,tool) -> saved mode (server truth)
+let current = {};        // K(src,tool) -> selected mode
+let pinned = new Set();  // K(src,tool)
+let rowEls = {};         // K(src,tool) -> {row, seg, thumb, btns}
+let groupState = {};     // "src|label" -> {keys, bicon, blabel}
+
+function parsePayload(text) {
+  const m = text && text.match(/<!--MANAGE\s+(\{[\s\S]*?\})\s*-->/);
+  if (m) { try { return JSON.parse(m[1]); } catch {} }
+  return null;
+}
+
+function setNote(msg, kind) {
+  const n = $("note");
+  n.className = "note" + (kind ? " " + kind : "");
+  n.replaceChildren();
+  if (kind === "ok") {
+    const g = document.createElement("span");
+    g.className = "nglyph";
+    g.textContent = "✓ ";
+    n.append(g);
+  }
+  n.append(msg || "");
+}
+
+function dirtyMap() {
+  const d = {};
+  for (const [tool, mode] of Object.entries(current)) if (mode !== base[tool]) d[tool] = mode;
+  return d;
+}
+
+function refreshChrome() {
+  const n = Object.keys(dirtyMap()).length;
+  $("save").disabled = n === 0;
+  $("save").textContent = n ? `Save (${n})` : "Save";
+  for (const [tool, els] of Object.entries(rowEls)) {
+    els.row.classList.toggle("dirty", current[tool] !== base[tool]);
+  }
+  for (const g of Object.values(groupState)) {
+    const modes = new Set(g.keys.map((t) => current[t]));
+    if (modes.size === 1) {
+      const m = [...modes][0];
+      g.blabel.textContent = MODE_LABEL[m];
+      g.bicon.innerHTML = SMALL_ICONS[m];
+    } else {
+      g.blabel.textContent = "Custom";
+      g.bicon.innerHTML = "";
+    }
+  }
+}
+
+function select(tool, mode) {
+  if (pinned.has(tool)) return;
+  current[tool] = mode;
+  const els = rowEls[tool];
+  els.thumb.style.transform = `translateX(${MODES.indexOf(mode) * 30}px)`;
+  els.btns.forEach((b) => b.setAttribute("aria-checked", String(b.dataset.mode === mode)));
+  refreshChrome();
+}
+
+function buildSeg(key, tool) {
+  const seg = document.createElement("div");
+  seg.className = "seg" + (pinned.has(key) ? " pinned" : "");
+  seg.setAttribute("role", "radiogroup");
+  seg.setAttribute("aria-label", titleCase(tool));
+  if (pinned.has(key)) seg.title = "Pinned in the server's code — not changeable here.";
+  const thumb = document.createElement("div");
+  thumb.className = "sthumb";
+  thumb.style.transform = `translateX(${MODES.indexOf(current[key]) * 30}px)`;
+  seg.append(thumb);
+  const btns = MODES.map((mode) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("role", "radio");
+    b.dataset.mode = mode;
+    b.setAttribute("aria-label", MODE_LABEL[mode]);
+    b.setAttribute("aria-checked", String(current[key] === mode));
+    b.title = MODE_LABEL[mode];
+    b.innerHTML = ICONS[mode];
+    b.addEventListener("click", () => select(key, mode));
+    seg.append(b);
+    return b;
+  });
+  return { seg, thumb, btns };
+}
+
+function closeMenus() { document.querySelectorAll(".menu").forEach((m) => m.remove()); }
+document.addEventListener("click", (e) => { if (!e.target.closest(".blanket")) closeMenus(); });
+
+function buildGroup(src, label, tools) {
+  const keys = tools.map((t) => K(src, t));
+  const wrap = document.createElement("div");
+  const ghead = document.createElement("div");
+  ghead.className = "ghead";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "gtoggle";
+  toggle.setAttribute("aria-expanded", "true");
+  toggle.innerHTML = `<span class="chev">${CHEV}</span><span>${label}</span><span class="count">${tools.length}</span>`;
+  const blanket = document.createElement("div");
+  blanket.className = "blanket";
+  const bbtn = document.createElement("button");
+  bbtn.type = "button";
+  bbtn.setAttribute("aria-label", "Blanket permission for group");
+  const bicon = document.createElement("span");
+  bicon.className = "bicon";
+  const blabel = document.createElement("span");
+  const bchev = document.createElement("span");
+  bchev.className = "chev";
+  bchev.innerHTML = CHEV;
+  bbtn.append(bicon, blabel, bchev);
+  blanket.append(bbtn);
+  ghead.append(toggle, blanket);
+  const rows = document.createElement("div");
+  rows.className = "rows";
+  for (const tool of tools) {
+    const key = K(src, tool);
+    const row = document.createElement("div");
+    row.className = "row";
+    const name = document.createElement("span");
+    name.className = "tname";
+    name.textContent = titleCase(tool);
+    name.title = tool;
+    const { seg, thumb, btns } = buildSeg(key, tool);
+    row.append(name, seg);
+    rows.append(row);
+    rowEls[key] = { row, seg, thumb, btns };
+  }
+  toggle.addEventListener("click", () => {
+    const open = rows.hidden;
+    rows.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.parentElement.parentElement.classList.toggle("collapsed", !open);
+  });
+  bbtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const existing = blanket.querySelector(".menu");
+    closeMenus();
+    if (existing) return;
+    const menu = document.createElement("div");
+    menu.className = "menu";
+    for (const mode of MODES) {
+      const opt = document.createElement("button");
+      opt.type = "button";
+      const mi = document.createElement("span");
+      mi.className = "micon";
+      mi.innerHTML = SMALL_ICONS[mode];
+      opt.append(mi, MODE_LABEL[mode]);
+      opt.addEventListener("click", () => { keys.forEach((k) => select(k, mode)); closeMenus(); });
+      menu.append(opt);
+    }
+    blanket.append(menu);
+  });
+  groupState[`${src}|${label}`] = { keys, bicon, blabel };
+  wrap.append(ghead, rows);
+  return wrap;
+}
+
+function buildSource(src, info) {
+  const wrap = document.createElement("div");
+  wrap.className = "srcsec collapsed";  // connectors start collapsed: viewer drills in
+  const shead = document.createElement("div");
+  shead.className = "shead";
+  const stoggle = document.createElement("button");
+  stoggle.type = "button";
+  stoggle.className = "stoggle";
+  stoggle.setAttribute("aria-expanded", "false");
+  const count = Object.keys(info.tools).length;
+  stoggle.innerHTML =
+    `<span class="chev">${CHEV}</span><span class="sava">${src[0].toUpperCase()}</span>` +
+    `<span class="sname">${titleCase(src)}</span><span class="count">${count}</span>`;
+  shead.append(stoggle);
+  const content = document.createElement("div");
+  content.hidden = true;
+  // Same buckets as Claude's connector UI: readOnlyHint true / explicit false /
+  // annotations absent.
+  const names = Object.keys(info.tools).sort();
+  const byGroup = { "Read-only tools": [], "Write/delete tools": [], "Other tools": [] };
+  for (const tool of names) {
+    const ro = info.tools[tool].read_only;
+    byGroup[ro === true ? "Read-only tools" : ro === false ? "Write/delete tools" : "Other tools"].push(tool);
+  }
+  for (const [label, list] of Object.entries(byGroup)) {
+    if (list.length) content.append(buildGroup(src, label, list));
+  }
+  stoggle.addEventListener("click", () => {
+    const open = content.hidden;
+    content.hidden = !open;
+    stoggle.setAttribute("aria-expanded", String(open));
+    wrap.classList.toggle("collapsed", !open);
+  });
+  wrap.append(shead, content);
+  return wrap;
+}
+
+function render(data) {
+  base = {}; current = {}; rowEls = {}; groupState = {};
+  pinned = new Set();
+  const sources = Object.entries(data.sources || {}).sort(([a], [b]) => a.localeCompare(b));
+  for (const [src, info] of sources) {
+    for (const t of info.pinned || []) pinned.add(K(src, t));
+    for (const [tool, tinfo] of Object.entries(info.tools)) {
+      base[K(src, tool)] = tinfo.mode;
+      current[K(src, tool)] = tinfo.mode;
+    }
+  }
+  const groups = $("groups");
+  groups.replaceChildren();
+  if (!sources.length) {
+    $("fullnote").hidden = false;
+    $("fullnote").textContent =
+      "No tool catalogs registered yet — connect or refresh a connector once, then reopen this panel.";
+    return;
+  }
+  for (const [src, info] of sources) groups.append(buildSource(src, info));
+  $("savebar").hidden = false;
+  refreshChrome();
+}
+
+async function save() {
+  const dirty = dirtyMap();
+  if (!Object.keys(dirty).length) return;
+  // Nest the flat keys back into {source: {tool: mode}} for the wire.
+  const changes = {};
+  for (const [key, mode] of Object.entries(dirty)) {
+    const [src, tool] = key.split(SEP);
+    (changes[src] ??= {})[tool] = mode;
+  }
+  $("save").disabled = true;
+  setNote("Saving…");
+  try {
+    const resp = await fetch(`${PUBLIC_BASE}/manage/${ctx.token}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ changes }),
+    });
+    if (resp.status === 404) { setNote("Session expired — ask for the panel again.", "err"); return; }
+    const data = await resp.json();
+    if (!data.ok) { setNote(data.error || "Save failed.", "err"); refreshChrome(); return; }
+    const refusedFlat = [];
+    for (const [src, tools] of Object.entries(changes)) {
+      for (const [tool, mode] of Object.entries(tools)) {
+        if (data.refused?.[src]?.includes(tool)) refusedFlat.push(`${src}/${tool}`);
+        else base[K(src, tool)] = mode;
+      }
+    }
+    const srcs = Object.keys(changes).sort();
+    const refusedNote = refusedFlat.length
+      ? ` (${refusedFlat.join(", ")} is pinned and was not changed)` : "";
+    setNote(
+      `Saved — enforced within ~15s; refresh the ${srcs.join(" and ")} ` +
+      `connector${srcs.length > 1 ? "s" : ""} to update Claude's tool list.${refusedNote}`,
+      "ok",
+    );
+    refreshChrome();
+  } catch (e) {
+    diag("save failed: " + (e?.message ?? e));
+    setNote("Couldn't reach the approval service. Try again.", "err");
+    refreshChrome();
+  }
+}
+
+async function load() {
+  try {
+    const resp = await fetch(`${PUBLIC_BASE}/manage/${ctx.token}`);
+    if (resp.status === 404) {
+      $("fullnote").hidden = false;
+      $("fullnote").textContent = "This management session expired — ask for the panel again.";
+      return;
+    }
+    render(await resp.json());
+    diag(`loaded ${Object.keys(base).length} tools; base=${PUBLIC_BASE}`);
+  } catch (e) {
+    diag("load failed: " + (e?.message ?? e));
+    $("fullnote").hidden = false;
+    $("fullnote").textContent = "Couldn't reach the approval service to load the tool list.";
+  }
+}
+
+const app = new App({ name: "manage-widget", version: "0.1.0" }, {}, { autoResize: true });
+app.ontoolresult = (result) => {
+  const text = result?.content?.[0]?.text ?? "";
+  const p = parsePayload(text);
+  if (p?.token) {
+    ctx = p;
+    document.body.style.padding = "12px";
+    $("card").hidden = false;
+    load();
+  }
+};
+$("save").addEventListener("click", save);
+app.onhostcontextchanged = (c) => applyTheme(c?.theme);
+await app.connect();
+applyTheme(app.getHostContext()?.theme);
+diag("connected");
+</script>
+</body>
+</html>
