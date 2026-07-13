@@ -537,7 +537,20 @@ def test_gating_pins_are_reported_and_immutable():
         "set_gating": "needs_approval"
     }
     resp = _set_mode(c, "set_gating", "always_allow", source="gatekeeper")
-    assert resp.status_code == 403 and "pinned" in resp.json()["error"]
+    assert resp.status_code == 403 and "fixed in code" in resp.json()["error"]
+    assert c.get("/gating", params={"source": "gatekeeper"}).json()["modes"] == {
+        "set_gating": "needs_approval"
+    }
+
+
+def test_gatekeeper_source_is_wholly_unmanageable():
+    # The whole gatekeeper source is off-limits, not just the pinned tool: no mode
+    # write lands on ANY of its tools, and stored modes for it (say, a hand-edited
+    # state file) are ignored -- code is the only authority on how the gatekeeper
+    # itself behaves.
+    c = TestClient(svc.app)
+    assert _set_mode(c, "manage_tools", "blocked", source="gatekeeper").status_code == 403
+    svc._STATE["gatekeeper"] = {"catalog": {}, "modes": {"manage_tools": "blocked"}}
     assert c.get("/gating", params={"source": "gatekeeper"}).json()["modes"] == {
         "set_gating": "needs_approval"
     }
@@ -588,7 +601,8 @@ def test_middleware_blocked_tool_refuses_without_approval_path(monkeypatch):
 
 
 def _tool(name, read_only=False):
-    # read_only=None models a tool with NO annotations (grouped as "Other tools").
+    # read_only=None models a tool with NO annotations (the MCP spec default applies:
+    # not read-only, same as Claude's own grouping).
     return SimpleNamespace(
         name=name,
         description=f"{name} does things",
@@ -632,8 +646,9 @@ def test_middleware_list_registers_the_full_catalog(monkeypatch):
         "mode": "blocked",
     }
     assert tools["get_me"]["read_only"] is True and tools["get_me"]["mode"] == "always_allow"
-    # No annotations -> tri-state None, which the widget groups as "Other tools".
-    assert tools["probe"]["read_only"] is None
+    # No annotations -> the spec default: NOT read-only, exactly as Claude's UI
+    # groups an annotation-less tool under Interactive.
+    assert tools["probe"]["read_only"] is False
 
 
 def test_middleware_list_survives_a_down_sidecar():
@@ -676,9 +691,9 @@ def test_manage_session_serves_every_registered_connector():
     }
     assert sources["teltool"]["tools"]["get_me"]["mode"] == "always_allow"
     assert sources["teltool"]["pinned"] == []
-    # The gatekeeper is a connector like any other, with its code pin surfaced.
-    assert sources["gatekeeper"]["pinned"] == ["set_gating"]
-    assert sources["gatekeeper"]["tools"]["set_gating"]["mode"] == "needs_approval"
+    # The gatekeeper never appears in the panel, even with a registered catalog:
+    # its own tools aren't manageable (set_gating pinned, manage_tools human-driven).
+    assert "gatekeeper" not in sources
 
 
 def test_manage_save_applies_persists_and_allows_resave(tmp_path, monkeypatch):
@@ -715,10 +730,10 @@ def test_manage_save_respects_pins_and_validates_modes():
     c = TestClient(svc.app)
     r = c.post(
         f"/manage/{_mint(c)}",
-        json={"changes": {"gatekeeper": {"set_gating": "always_allow"}}},
+        json={"changes": {"gatekeeper": {"set_gating": "always_allow", "manage_tools": "blocked"}}},
     ).json()
-    # The widget cannot unpin set_gating any more than the tool can.
-    assert r["applied"] == 0 and r["refused"] == {"gatekeeper": ["set_gating"]}
+    # A save cannot touch the gatekeeper's own tools any more than set_gating can.
+    assert r["applied"] == 0 and r["refused"] == {"gatekeeper": ["set_gating", "manage_tools"]}
     assert c.get("/gating", params={"source": "gatekeeper"}).json()["modes"] == {
         "set_gating": "needs_approval"
     }

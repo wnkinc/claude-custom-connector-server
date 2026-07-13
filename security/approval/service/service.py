@@ -627,6 +627,12 @@ async def telegram_interact(request):  # type: ignore[no-untyped-def]
 # widget; PINNED entries are immutable at runtime -- changing one takes a code
 # change right here, by design.
 _PINNED = {("gatekeeper", "set_gating"): "needs_approval"}  # the gate-changer stays human-gated
+# The gatekeeper's own tools are not runtime-manageable at all: set_gating is pinned
+# above, and manage_tools is inherently human-in-the-loop (nothing changes without the
+# user's click on Save in the panel). The source is omitted from the manage panel,
+# every mode write against it is refused, and stored modes for it are ignored --
+# changing how the gatekeeper itself behaves takes a code change, by design.
+_UNMANAGED_SOURCES = {"gatekeeper"}
 _MODES = {"always_allow", "needs_approval", "blocked"}
 _DEFAULT_MODE = "always_allow"
 _STATE: dict[str, dict] = {}  # source -> {"catalog": {tool: {...}}, "modes": {tool: mode}}
@@ -660,8 +666,12 @@ def _source_state(source: str) -> dict:
 
 
 def _effective_modes(source: str) -> dict[str, str]:
-    """Stored choices with the code-pinned entries stamped on top (pins always win)."""
-    modes = dict((_STATE.get(source) or {}).get("modes") or {})
+    """Stored choices with the code-pinned entries stamped on top (pins always win).
+    An unmanaged source takes no stored choices at all -- code is its only authority."""
+    if source in _UNMANAGED_SOURCES:
+        modes = {}
+    else:
+        modes = dict((_STATE.get(source) or {}).get("modes") or {})
     for (src, tool), mode in _PINNED.items():
         if src == source:
             modes[tool] = mode
@@ -673,11 +683,12 @@ async def catalog(request):  # type: ignore[no-untyped-def]
         body = await request.json()
         source = body["source"]
         _source_state(source)["catalog"] = {
-            # read_only is TRI-STATE (True/False/None) -- None means the tool has no
-            # annotations, which the widget groups as "Other tools" like Claude's UI.
+            # read_only follows the MCP spec default Claude's UI applies: only an
+            # explicit readOnlyHint=true is read-only; false, absent, or a legacy
+            # null all mean write/delete.
             t["name"]: {
                 "description": t.get("description", ""),
-                "read_only": t.get("read_only"),
+                "read_only": t.get("read_only") is True,
             }
             for t in body.get("tools") or []
         }
@@ -700,6 +711,11 @@ async def gating(request):  # type: ignore[no-untyped-def]
         return JSONResponse({"source": source, "modes": _effective_modes(source)})
     body = await request.json()
     source, tool, mode = body["source"], body["tool"], body.get("mode")
+    if source in _UNMANAGED_SOURCES:
+        return JSONResponse(
+            {"ok": False, "error": f"{source} manages the gates; its own tools are fixed in code"},
+            status_code=403,
+        )
     if (source, tool) in _PINNED:
         return JSONResponse(
             {"ok": False, "error": f"{tool} is pinned to {_PINNED[(source, tool)]} in code"},
@@ -779,7 +795,7 @@ async def manage_session(request):  # type: ignore[no-untyped-def]
         for src, tools in changes.items():
             modes = _source_state(src)["modes"]
             for tool, mode in tools.items():
-                if (src, tool) in _PINNED:
+                if src in _UNMANAGED_SOURCES or (src, tool) in _PINNED:
                     refused.setdefault(src, []).append(tool)
                 else:
                     modes[tool] = mode
@@ -790,11 +806,12 @@ async def manage_session(request):  # type: ignore[no-untyped-def]
             {"ok": True, "applied": applied, "refused": refused}, headers=_MANAGE_CORS
         )
     # GET: the widget's data source -- every connector with a registered catalog,
-    # each with the same catalog+modes view the gatekeeper reads.
+    # each with the same catalog+modes view the gatekeeper reads. The gatekeeper
+    # itself is absent by design: its tools aren't manageable.
     sources = {}
     for src, st in _STATE.items():
         catalog = st.get("catalog") or {}
-        if not catalog:
+        if src in _UNMANAGED_SOURCES or not catalog:
             continue
         modes = _effective_modes(src)
         sources[src] = {
