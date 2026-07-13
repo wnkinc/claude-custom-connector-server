@@ -80,6 +80,19 @@ def test_untrusted_output_adds_guardrail_and_strips_schemas():
     assert all(schema is None for schema in _tool_schemas(mcp).values())
 
 
+def test_source_names_both_middlewares():
+    # source is the tool's ONE short name across the security plumbing (approval
+    # scoping + catalog/panel section + guardrail tags); it defaults to mcp.name
+    # and an explicit arg overrides it (xmcp's display name isn't its tool name).
+    ours = (ApprovalMiddleware, GuardrailMiddleware)
+    mcp = _mcp()
+    _serve_captured(mcp, untrusted_output=True, require_approval=True)
+    assert {m.source for m in mcp.middleware if isinstance(m, ours)} == {"t"}
+    mcp = _mcp()
+    _serve_captured(mcp, untrusted_output=True, require_approval=True, source="xmcp")
+    assert {m.source for m in mcp.middleware if isinstance(m, ours)} == {"xmcp"}
+
+
 def test_approval_is_outermost_of_the_two():
     # FastMCP wraps reversed(middleware): first-added is outermost. Approval must
     # short-circuit BEFORE the guardrail ever sees a result (see serve()'s docstring).

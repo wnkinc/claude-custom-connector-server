@@ -443,8 +443,10 @@ def main() -> None:
     port = int(os.getenv("MCP_PORT", "8000"))
     mcp = create_mcp()
     # x-mcp returns UNTRUSTED external X content, so screen output; and gate every call
-    # behind out-of-band human approval. guardrail_source tags the wrapped content.
-    serve(mcp, port=port, untrusted_output=True, require_approval=True, guardrail_source="xmcp")
+    # behind out-of-band human approval. source names this tool across the security
+    # plumbing (approval scoping, the manage panel's section, guardrail tags) -- the
+    # server's own display name is "X API MCP".
+    serve(mcp, port=port, untrusted_output=True, require_approval=True, source="xmcp")
 
 
 if __name__ == "__main__":
