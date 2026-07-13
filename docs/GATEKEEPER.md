@@ -61,9 +61,16 @@ gatekeeper tool ──► approval sidecar (sole authority on modes) ◄── e
 - **`deploy_status()`** is the read-only deployment inventory: deployed tools (live
   startup beacons) with last-used, stale leftovers, and undeployed tools from the
   codebase — each described by its `tools/<name>/deploy.json` manifest (summary, the
-  secrets enabling it needs and where to get them, notes like image size). The agent
-  uses it to answer "what else could I add?" and to walk a manual enable; chat-driven
-  deploys build on it in a later phase.
+  secrets enabling it needs and where to get them, notes like image size), plus
+  secrets-staged state and in-flight deploy progress from the reconciler.
+- **`deploy_tool(name)`** deploys an undeployed tool, one at a time — **pinned
+  `needs_approval`** like `set_gating`, so every deploy takes explicit human consent.
+  It only ever *requests*: the **host reconciler** (`deploy/host/`, a small systemd
+  service outside every container — containers never hold Docker rights) validates
+  and applies it, and `deploy_status` tracks progress. Secrets never pass through
+  chat: they're staged in `tools/<name>/.env` on the host, and the flow only checks
+  readiness. Without the reconciler installed, `deploy_tool` says so and the manual
+  steps in the deploy runbook still work.
 
 The gatekeeper itself is **not manageable**: the sidecar refuses every mode write
 against the `gatekeeper` source and leaves it out of the panel. Its tools' behavior

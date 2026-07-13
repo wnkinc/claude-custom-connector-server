@@ -3,11 +3,16 @@
 The approval sidecar is the sole authority on tool modes (see
 security/approval/gating.py): each approval-enabled server registers its full tool
 catalog there, every tool defaults to always_allow, and the operator's choices are
-stored per (source, tool). Three tools:
+stored per (source, tool). Four tools:
 
   - deploy_status() -- read-only deployment inventory: what's running (live startup
         beacons), what's stale, and what else the codebase ships (tools/*/deploy.json
-        manifests) with the secrets/notes enabling each would involve.
+        manifests) with the secrets/notes enabling each would involve, secrets-staged
+        state, and in-flight deploy progress. The free companion to deploy_tool.
+  - deploy_tool(name) -- request deploying an undeployed tool (PINNED needs_approval:
+        a human approves every deploy). Only ever writes a request; the HOST
+        reconciler (deploy/host/) validates and applies it. Secrets never pass
+        through here -- they're staged on the host, this only checks readiness.
 
   - manage_tools()  -- the in-chat permissions panel (a widget, one section per
         connector; see security/approval/manage_widget.py). The human review-and-save
@@ -73,10 +78,15 @@ def _ago(epoch: float | None, now: float) -> str:
     return f"{round(s / 86400)}d ago"
 
 
-def format_deploy_status(manifests: dict, sources: dict, now: float | None = None) -> str:
+def format_deploy_status(
+    manifests: dict, sources: dict, deploy: dict | None = None, now: float | None = None
+) -> str:
     """The agent-facing inventory: deployed tools (from live beacons), undeployed
-    ones (manifest present, no fresh beacon) with what enabling each would take."""
+    ones (manifest present, no fresh beacon) with what enabling each would take,
+    plus the reconciler's view (secrets staged? an operation in flight?)."""
     now = now or time.time()
+    deploy = deploy or {}
+    inventory = deploy.get("inventory") or {}
     fresh = {
         s
         for s, st in sources.items()
@@ -99,19 +109,56 @@ def format_deploy_status(manifests: dict, sources: dict, now: float | None = Non
         for profile in undeployed:
             m = manifests[profile]
             lines.append(f"  - {profile}: {m['summary']}")
+            inv = inventory.get(profile)
             if m.get("secrets"):
                 needs = "; ".join(f"{s['label']} ({s['hint']})" for s in m["secrets"])
                 lines.append(f"      secrets needed: {needs}")
+                if inv is not None:
+                    staged = (
+                        "staged ✓"
+                        if inv.get("secrets_ready")
+                        else f"missing: {', '.join(inv.get('missing_secrets', []))}"
+                    )
+                    lines.append(f"      secrets staged: {staged}")
             else:
                 lines.append("      secrets needed: none beyond the shared Google OAuth identity")
             for note in m.get("notes", []):
                 lines.append(f"      note: {note}")
+    # The reconciler's own state: whether chat-driven deploys can execute at all,
+    # and what the last / current operation did.
+    reconciler = deploy.get("reconciler", "absent")
+    if reconciler == "live":
+        if deploy.get("in_flight"):
+            op = deploy.get("request") or deploy.get("status") or {}
+            phase = (deploy.get("status") or {}).get("phase", "queued")
+            lines.append(
+                f"Deploy in flight: {op.get('tool')} ({phase}) -- re-check deploy_status "
+                "for progress; large images take minutes."
+            )
+        else:
+            last = deploy.get("status") or {}
+            if last.get("phase"):
+                lines.append(
+                    f"Last deploy operation: {last.get('tool')} -> {last['phase']}"
+                    + (f" ({last.get('detail')})" if last.get("detail") else "")
+                )
+            if undeployed:
+                lines.append(
+                    "To deploy: stage the tool's secrets in tools/<name>/.env on the host "
+                    "(deploy_status shows when they're staged), make sure "
+                    "https://<subdomain>.<your-domain>/auth/callback is on the shared Google "
+                    "OAuth client, then call deploy_tool(<name>) -- it needs the user's "
+                    "approval, applies via the host reconciler, and finishes with adding "
+                    "the connector in claude.ai."
+                )
+    elif undeployed:
         lines.append(
-            "To deploy one today (chat-driven deploy arrives in a later phase), on the host: "
-            "fill tools/<name>/.env from its env.example, add https://<subdomain>.<your-domain>"
-            "/auth/callback to the shared Google OAuth client, add the profile to "
-            "COMPOSE_PROFILES in the root .env, run docker compose (both -f files) up -d "
-            "--build <name>, then add the connector in claude.ai."
+            "The deploy reconciler is not running on the host (deploy/host/README.md), so "
+            "deploy_tool can't execute. Manual path: fill tools/<name>/.env, add "
+            "https://<subdomain>.<your-domain>/auth/callback to the shared Google OAuth "
+            "client, add the profile to COMPOSE_PROFILES in the root .env, run docker "
+            "compose (both -f files) up -d --build <name>, then add the connector in "
+            "claude.ai."
         )
     return "\n".join(lines)
 
@@ -120,10 +167,72 @@ def format_deploy_status(manifests: dict, sources: dict, now: float | None = Non
 async def deploy_status() -> str:
     """What this deployment serves and what else it could: deployed tools (with
     last-used), stale leftovers, and undeployed tools from the codebase with the
-    secrets/notes enabling each would involve. Read-only."""
+    secrets/notes enabling each would involve -- plus whether their secrets are
+    staged and how any in-flight deploy is progressing. Read-only; the free
+    companion to deploy_tool."""
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(f"{APPROVAL_URL}/sources")
-    return format_deploy_status(load_manifests(), resp.json())
+        src_resp = await client.get(f"{APPROVAL_URL}/sources")
+        dep_resp = await client.get(f"{APPROVAL_URL}/deploy/state")
+    return format_deploy_status(load_manifests(), src_resp.json(), dep_resp.json())
+
+
+@mcp.tool
+async def deploy_tool(name: str) -> str:
+    """Deploy an undeployed tool from the codebase (one at a time). Requires the
+    user's approval, then the host reconciler applies it: profile added, image
+    built, container up -- progress and results via deploy_status. Prerequisite:
+    the tool's secrets staged on the host (deploy_status shows staged/missing).
+    This call only REQUESTS the deploy; it never handles secret values."""
+    manifests = load_manifests()
+    if name not in manifests:
+        return (
+            f"⚠️ `{name}` is not a shipped tool. Available manifests: "
+            f"{', '.join(sorted(manifests))}."
+        )
+    async with httpx.AsyncClient(timeout=10) as client:
+        sources = (await client.get(f"{APPROVAL_URL}/sources")).json()
+        deploy = (await client.get(f"{APPROVAL_URL}/deploy/state")).json()
+    reg = (sources.get(name) or {}).get("registered")
+    if reg and time.time() - reg < DEPLOYED_WINDOW_SECONDS:
+        return f"`{name}` is already deployed (live startup beacon). Nothing to do."
+    if deploy.get("reconciler") != "live":
+        return (
+            "⚠️ The deploy reconciler is not running on the host, so this can't "
+            "execute. Install it (deploy/host/README.md) or follow the manual steps "
+            "in deploy_status. Nothing was changed."
+        )
+    if deploy.get("in_flight"):
+        op = deploy.get("request") or {}
+        return (
+            f"⚠️ A deploy is already in flight ({op.get('tool')}). One at a time -- "
+            "check deploy_status for progress. Nothing was changed."
+        )
+    inv = (deploy.get("inventory") or {}).get(name) or {}
+    if manifests[name].get("secrets") and not inv.get("secrets_ready"):
+        missing = ", ".join(
+            inv.get("missing_secrets") or [s["key"] for s in manifests[name]["secrets"]]
+        )
+        return (
+            f"⚠️ `{name}`'s secrets aren't staged yet (missing: {missing}). Fill "
+            f"tools/{name}/.env on the host (its env.example is the template; "
+            "deploy_status shows each secret's source), then call this again. "
+            "Nothing was changed."
+        )
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(f"{APPROVAL_URL}/deploy/request", json={"tool": name})
+    data = resp.json()
+    if not data.get("ok"):
+        return (
+            f"⚠️ Deploy request refused: {data.get('error', 'unknown error')}. Nothing was changed."
+        )
+    notes = "; ".join(manifests[name].get("notes", [])[:2])
+    return (
+        f"🚀 Deploy of `{name}` requested (id {data['id']}) -- the host reconciler is "
+        f"applying it now. Track progress with deploy_status."
+        + (f" Notes: {notes}" if notes else "")
+        + " When it's up, add the connector in claude.ai "
+        f"(https://{manifests[name]['subdomain']}.<your-domain>/mcp)."
+    )
 
 
 @mcp.tool
