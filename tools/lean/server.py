@@ -372,7 +372,9 @@ def main() -> None:
     port = int(os.getenv("MCP_PORT", "8064"))
     # Trusted internal tool: it runs agent-authored code against local data and
     # returns engine output (no untrusted external content -> no guardrail leg).
-    serve(mcp, port=port)
+    # Approval is on like every tool: ship-open (all always_allow) until the operator
+    # gates something, and it registers this tool in the manage panel at startup.
+    serve(mcp, port=port, require_approval=True)
 
 
 if __name__ == "__main__":

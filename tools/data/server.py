@@ -379,8 +379,10 @@ def lean_export_tool(
 def main() -> None:
     load_env()
     port = int(os.getenv("MCP_PORT", "8062"))
-    # data returns trusted, structured market data -> no guardrail / approval.
-    serve(mcp, port=port)
+    # data returns trusted, structured market data -> no guardrail leg. Approval is
+    # on like every tool: ship-open (all always_allow) until the operator gates
+    # something, and it's what registers this tool in the manage panel at startup.
+    serve(mcp, port=port, require_approval=True)
 
 
 if __name__ == "__main__":
