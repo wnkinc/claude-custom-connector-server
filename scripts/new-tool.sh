@@ -2,7 +2,7 @@
 # Stamp a new container-first mcp-tools server.
 #
 #   scripts/new-tool.sh <name> <port> [subdomain]
-#   scripts/new-tool.sh weather 8065
+#   scripts/new-tool.sh weather 8066
 #
 # Creates tools/<name>/ (FastMCP server wired to the shared serve() helper, env.example,
 # Dockerfile) + a per-tool egress allowlist, and inserts a service + state volume into
@@ -133,10 +133,15 @@ service = f"""  {name}:
     environment:
       MCP_HOST: 0.0.0.0
       MCP_TRANSPORT: http
+      # The approval sidecar: modes + the startup catalog registration that puts
+      # this tool in the manage panel (see serve()'s /healthz).
+      APPROVAL_URL: http://approval:8072
       MCP_AUTH_ENABLED: "0"
       HTTPS_PROXY: http://egress:{eport}
       HTTP_PROXY: http://egress:{eport}
-      NO_PROXY: localhost,127.0.0.1
+      # approval must bypass the egress wall (sideways traffic, not internet):
+      # the /healthz startup registration and mode fetches go straight to it.
+      NO_PROXY: approval,localhost,127.0.0.1
     volumes:
       - {name}-state:/app/state
     networks:
