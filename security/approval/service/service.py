@@ -33,6 +33,7 @@ import html
 import json
 import logging
 import os
+import re
 import secrets
 import time
 import urllib.parse
@@ -626,7 +627,11 @@ async def telegram_interact(request):  # type: ignore[no-untyped-def]
 # deploy). Writers are the gatekeeper's set_gating tool and (later) the permissions
 # widget; PINNED entries are immutable at runtime -- changing one takes a code
 # change right here, by design.
-_PINNED = {("gatekeeper", "set_gating"): "needs_approval"}  # the gate-changer stays human-gated
+_PINNED = {
+    # The gate-changer and the deploy-requester stay human-gated, as code constants.
+    ("gatekeeper", "set_gating"): "needs_approval",
+    ("gatekeeper", "deploy_tool"): "needs_approval",
+}
 # The gatekeeper's own tools are not runtime-manageable at all: set_gating is pinned
 # above, and manage_tools is inherently human-in-the-loop (nothing changes without the
 # user's click on Save in the panel). The source is omitted from the manage panel,
@@ -728,6 +733,83 @@ async def sources(request):  # type: ignore[no-untyped-def]
             for src, st in _STATE.items()
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Deploy control: the bridge between chat and the HOST reconciler (deploy/host/).
+# The sidecar may only WRITE request.json -- the reconciler owns status.json and
+# inventory.json (single-writer files; ownership enforces the split). A request
+# is only ever written by the gatekeeper's deploy_tool, which is PINNED
+# needs_approval: a human approved before this endpoint is reached. The reconciler
+# re-validates everything anyway (shipped tools only, secrets staged).
+def _control_dir() -> str:
+    return os.getenv("DEPLOY_CONTROL_DIR", "")
+
+
+def _read_control(name: str) -> dict | None:
+    path = os.path.join(_control_dir(), name)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _deploy_state() -> dict:
+    """The merged view deploy_status/deploy_tool read: reconciler presence, current
+    inventory, the last operation, and whether a request is still unconsumed."""
+    inventory = _read_control("inventory.json")
+    status = _read_control("status.json") or {}
+    req = _read_control("request.json") or {}
+    fresh = bool(inventory and time.time() - inventory.get("updated", 0) < 120)
+    in_flight = (
+        bool(req.get("id") and req["id"] != status.get("last_id"))
+        or status.get("phase") == "applying"
+    )
+    return {
+        "reconciler": "live" if fresh else ("stale" if inventory else "absent"),
+        "inventory": (inventory or {}).get("tools", {}),
+        "status": status,
+        "in_flight": in_flight,
+        "request": {k: req.get(k) for k in ("id", "tool", "action")} if req.get("id") else None,
+    }
+
+
+async def deploy_state(request):  # type: ignore[no-untyped-def]
+    return JSONResponse(_deploy_state())
+
+
+async def deploy_request(request):  # type: ignore[no-untyped-def]
+    body = await request.json()
+    tool = str(body.get("tool", ""))
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", tool):
+        return JSONResponse({"ok": False, "error": "invalid tool name"}, status_code=400)
+    state = _deploy_state()
+    if state["reconciler"] == "absent":
+        return JSONResponse(
+            {"ok": False, "error": "reconciler not installed (see deploy/host/README.md)"},
+            status_code=409,
+        )
+    if state["in_flight"]:
+        return JSONResponse(
+            {"ok": False, "error": "another deploy is in flight; one at a time"},
+            status_code=409,
+        )
+    req = {
+        "id": secrets.token_urlsafe(8),
+        "action": "deploy",
+        "tool": tool,
+        "requested": time.time(),
+    }
+    try:
+        with open(os.path.join(_control_dir(), "request.json"), "w") as f:
+            json.dump(req, f)
+    except OSError as exc:
+        return JSONResponse(
+            {"ok": False, "error": f"could not write the request: {exc}"}, status_code=500
+        )
+    log.info("deploy requested: %s (id %s)", tool, req["id"])
+    return JSONResponse({"ok": True, "id": req["id"]})
 
 
 async def gating(request):  # type: ignore[no-untyped-def]
@@ -897,6 +979,8 @@ app = Starlette(
         Route("/gating", gating, methods=["GET", "POST"]),
         Route("/catalog", catalog, methods=["GET", "POST"]),
         Route("/sources", sources, methods=["GET"]),
+        Route("/deploy/state", deploy_state, methods=["GET"]),
+        Route("/deploy/request", deploy_request, methods=["POST"]),
         Route("/manage", manage_mint, methods=["POST"]),
         Route("/manage/{token}", manage_session, methods=["GET", "POST", "OPTIONS"]),
         Route("/healthz", healthz, methods=["GET"]),

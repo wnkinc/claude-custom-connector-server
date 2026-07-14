@@ -247,6 +247,12 @@ cat > .env <<'ENVEOF'
 {env_body}
 ENVEOF
 {hf_fetch}
+# The deploy reconciler: applies chat-approved tool deploys (deploy/host/README.md).
+python3 deploy/host/reconcile.py --init --repo /opt/mcp-tools --user root
+sed 's|__REPO__|/opt/mcp-tools|; s|__RUN_AS__|root|' deploy/host/mcp-reconciler.service \\
+  > /etc/systemd/system/mcp-reconciler.service
+systemctl daemon-reload && systemctl enable --now mcp-reconciler
+
 # Per-tool secrets (tools/<tool>/.env) arrive later over SSM; required:false in
 # compose lets the stack come up while a tool waits for its secrets.
 docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d --build{scale_off}

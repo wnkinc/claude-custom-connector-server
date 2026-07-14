@@ -200,6 +200,12 @@ the OAuth client, egress listeners) already exists. Adding a tool you skipped:
 The tool appears in the gatekeeper's manage panel within ~30 s of starting (its
 health probe registers it), pre-gateable before Claude ever connects.
 
+**Chat-driven instead:** install the deploy reconciler once
+(`deploy/host/README.md` — three commands) and steps 3–4 become a conversation:
+the agent checks `deploy_status`, tells you which secrets to stage and where they
+come from, and `deploy_tool(<name>)` applies the deploy after your approval. Only
+step 1 (secrets on the host) and the Google/Claude browser steps stay manual.
+
 Removing one is the mirror: delete it from `COMPOSE_PROFILES`,
 `up -d --remove-orphans` (both `-f` files!), remove the connector in Claude, and
 Forget its now-stale section in the manage panel. Its image, secrets, and state
