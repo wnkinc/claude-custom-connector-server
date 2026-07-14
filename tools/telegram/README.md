@@ -13,13 +13,14 @@ guardrail exactly as for a native tool.
 - **Read-only by default** (`TELEGRAM_EXPOSED_TOOLS=read-only`, enforced as the
   child-env default in `server.py`): the engine's 49 `readOnlyHint` tools — read
   chats/messages/contacts, search. No send, delete, join, or admin ops.
-- **Writes behind the approval gate**: `TELEGRAM_EXPOSED_TOOLS=all` (in `.env`)
-  exposes the 67 write tools, and on the public posture every non-exempt call
-  blocks on the out-of-band Slack approval (`security/approval/`) until a human
-  clicks Approve. `approval-exempt.txt` — the engine's read-only names minus two
-  upstream mislabels (`get_invite_link`/`export_chat_invite` actually *create*
-  invite links) — keeps reads flowing without a tap per call. Regenerate that
-  file when bumping the engine pin (instructions in its header).
+- **Writes gateable per tool**: `TELEGRAM_EXPOSED_TOOLS=all` (in `.env`)
+  exposes the write tools too. Every tool ships `always_allow` (Claude's own
+  permission UI is the first defense line); the operator gates or blocks
+  individual tools at runtime via the gatekeeper's `set_gating` or the in-chat
+  manage panel, and a gated call then blocks on the out-of-band approval card
+  (`security/approval/` — provider slack/discord/telegram) until a human
+  decides. Mind upstream's two mislabeled "reads" when curating:
+  `get_invite_link`/`export_chat_invite` actually *create* invite links.
 - **Guardrail-screened output** (`untrusted_output=True`): message content from
   arbitrary chats is a prompt-injection vector, same class as xmcp's web content.
 - **Egress**: MTProto dials Telegram DC IPs directly, so this tool's squid
