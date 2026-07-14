@@ -8,13 +8,15 @@ between local and AWS keeps the same domain, tunnel, and credentials.
 What this program owns (and `pulumi destroy` removes):
   - an EC2 instance (default: t3.small, 20 GB gp3) that boots docker, clones the
     repo at a pinned ref, renders the root .env, and brings up
-    docker-compose.yml + docker-compose.tunnel.yml — behind a security group
-    with zero inbound rules (tunnel + SSM agent dial out; admin access is SSM
-    Session Manager)
-  - the guardrail's cloud provider: an Amazon Bedrock Guardrail (prompt-attack
-    filter only) + an instance role scoped to ApplyGuardrail on it
-  - SSM SecureString parameters carrying the two boot secrets (tunnel credentials,
-    optional HF token) — secrets stay out of user-data, which is API-readable
+    docker-compose.yml + docker-compose.tunnel.yml (the boot script is
+    userdata.sh) — behind a security group with zero inbound rules (tunnel +
+    SSM agent dial out; admin access is SSM Session Manager)
+  - the guardrail's provider on this path: an Amazon Bedrock Guardrail
+    (prompt-attack filter only) + an instance role scoped to ApplyGuardrail on
+    it. The cloud deploy is always bedrock-screened; the local-model
+    (llamafirewall) provider is the local path's business.
+  - an SSM SecureString parameter carrying the one boot secret (tunnel
+    credentials) — secrets stay out of user-data, which is API-readable
 
 What stays manual (see docs/deploy/aws.md): the Google OAuth client, per-tool
 .env files (dropped onto the VM over SSM), and the optional Slack app.
@@ -25,8 +27,6 @@ Config (pulumi config set <key> <value>):
                                    organization/mcp-tools-cloudflare/prod
                                    (same backend as this stack)
   tools                default "xmcp,telegram" — comma list of tool profiles
-  guardrail            default "bedrock" — bedrock | llamafirewall | off
-  hfToken              secret; llamafirewall mode only
   repoUrl              default: the upstream repo
   repoRef              default "main" — pin a tag/commit for reproducible deploys
   instanceType         default "t3.small" — fits the light tools; lean wants ≥ 8 GB RAM
@@ -37,6 +37,7 @@ Config (pulumi config set <key> <value>):
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pulumi
 import pulumi_aws as aws
@@ -47,15 +48,10 @@ cfg = pulumi.Config()
 domain = cfg.require("domain")
 cloudflare_stack = cfg.require("cloudflareStack")
 tools = [t.strip() for t in (cfg.get("tools") or "xmcp,telegram").split(",") if t.strip()]
-guardrail_mode = cfg.get("guardrail") or "bedrock"
 repo_url = cfg.get("repoUrl") or UPSTREAM_REPO
 repo_ref = cfg.get("repoRef") or "main"
 instance_type = cfg.get("instanceType") or "t3.small"
 volume_gb = cfg.get_int("volumeGb") or 20
-hf_token = cfg.get_secret("hfToken")
-
-if guardrail_mode not in ("bedrock", "llamafirewall", "off"):
-    raise ValueError(f"guardrail must be bedrock|llamafirewall|off, got {guardrail_mode!r}")
 
 region = aws.get_region().name
 stack = pulumi.get_stack()
@@ -75,33 +71,22 @@ creds_param = aws.ssm.Parameter(
     value=creds_json,
 )
 
-hf_param = None
-if guardrail_mode == "llamafirewall" and hf_token:
-    hf_param = aws.ssm.Parameter(
-        f"{prefix}-hf-token",
-        name=f"/{prefix}/hf-token",
-        type="SecureString",
-        value=hf_token,
-    )
+# --- guardrail: Bedrock, always -- the cloud deploy's output screen ----------------
+withheld = "[guardrail: content withheld -- the screen flagged likely prompt-injection.]"
+guardrail = aws.bedrock.Guardrail(
+    f"{prefix}-guardrail",
+    name=prefix,
+    description="mcp-tools output screen: prompt-attack filter only (parity with PromptGuard).",
+    blocked_input_messaging=withheld,
+    blocked_outputs_messaging=withheld,
+    content_policy_config={
+        "filters_configs": [
+            {"type": "PROMPT_ATTACK", "input_strength": "HIGH", "output_strength": "NONE"}
+        ]
+    },
+)
 
-# --- guardrail: Bedrock (the cloud default) ---------------------------------------
-guardrail = None
-if guardrail_mode == "bedrock":
-    withheld = "[guardrail: content withheld -- the screen flagged likely prompt-injection.]"
-    guardrail = aws.bedrock.Guardrail(
-        f"{prefix}-guardrail",
-        name=prefix,
-        description="mcp-tools output screen: prompt-attack filter only (parity with PromptGuard).",
-        blocked_input_messaging=withheld,
-        blocked_outputs_messaging=withheld,
-        content_policy_config={
-            "filters_configs": [
-                {"type": "PROMPT_ATTACK", "input_strength": "HIGH", "output_strength": "NONE"}
-            ]
-        },
-    )
-
-# --- instance identity: SSM admin + exactly the two boot reads + ApplyGuardrail ---
+# --- instance identity: SSM admin + exactly the one boot read + ApplyGuardrail -----
 role = aws.iam.Role(
     f"{prefix}-role",
     assume_role_policy=json.dumps(
@@ -122,35 +107,26 @@ aws.iam.RolePolicyAttachment(
     role=role.name,
     policy_arn="arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
 )
-
-
-def _inline_policy(args: dict) -> str:
-    statements = [
-        {
-            "Effect": "Allow",
-            "Action": "ssm:GetParameter",
-            "Resource": [a for a in (args["creds_arn"], args["hf_arn"]) if a],
-        }
-    ]
-    if args["guardrail_arn"]:
-        statements.append(
-            {
-                "Effect": "Allow",
-                "Action": "bedrock:ApplyGuardrail",
-                "Resource": args["guardrail_arn"],
-            }
-        )
-    return json.dumps({"Version": "2012-10-17", "Statement": statements})
-
-
 aws.iam.RolePolicy(
     f"{prefix}-boot-and-guardrail",
     role=role.name,
-    policy=pulumi.Output.all(
-        creds_arn=creds_param.arn,
-        hf_arn=hf_param.arn if hf_param else "",
-        guardrail_arn=guardrail.guardrail_arn if guardrail else "",
-    ).apply(_inline_policy),
+    policy=pulumi.Output.json_dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "ssm:GetParameter",
+                    "Resource": creds_param.arn,
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": "bedrock:ApplyGuardrail",
+                    "Resource": guardrail.guardrail_arn,
+                },
+            ],
+        }
+    ),
 )
 profile = aws.iam.InstanceProfile(f"{prefix}-profile", role=role.name)
 
@@ -175,95 +151,30 @@ ami_id = aws.ssm.get_parameter(
     name="/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
 ).value
 
+BOOT_TEMPLATE = (Path(__file__).parent / "userdata.sh").read_text()
+
 
 def _user_data(a: dict) -> str:
-    # Profiles are tools only: the guardrail service carries the untrusted tools'
-    # profile names in compose, so it starts with them automatically; "off" here
-    # means unscreened (GUARDRAIL_ENABLED=0), not un-deployed.
-    profiles = ",".join(tools)
-    env = [
-        f"COMPOSE_PROFILES={profiles}",
-        f"MCP_DOMAIN={domain}",
-        f"TUNNEL_ID={a['tunnel_id']}",
-        "HOST_UID=1000",
-        "HOST_GID=1000",
-        f"GUARDRAIL_ENABLED={'1' if guardrail_mode != 'off' else '0'}",
-    ]
-    if guardrail_mode == "bedrock":
-        env += [
-            "GUARDRAIL_PROVIDER=bedrock",
-            f"BEDROCK_GUARDRAIL_ID={a['guardrail_id']}",
-            "BEDROCK_GUARDRAIL_VERSION=DRAFT",
-            f"AWS_REGION={region}",
-        ]
-    elif guardrail_mode == "llamafirewall":
-        env.append("GUARDRAIL_PROVIDER=llamafirewall")
-    elif guardrail_mode == "off":
-        # Unscreened by GUARDRAIL_ENABLED=0 above; the bedrock provider selects the
-        # slim image build, and --scale below keeps the container from starting.
-        env.append("GUARDRAIL_PROVIDER=bedrock")
-    env_body = "\n".join(env)
-
-    # "off" + an untrusted tool deployed: the guardrail service is profile-enabled
-    # (it rides the untrusted tools' profiles), so explicitly scale it to zero.
-    scale_off = ""
-    if guardrail_mode == "off" and ({"xmcp", "telegram"} & set(tools)):
-        scale_off = " --scale guardrail=0"
-
-    # SSM reads go through python3-boto3: Ubuntu 24.04 dropped the `awscli` apt
-    # package, and the v2 bundle would mean curl|unzip-ing an installer at boot.
-    ssm_read = (
-        "python3 -c \"import boto3; print(boto3.client('ssm', region_name='{region}')"
-        ".get_parameter(Name='{name}', WithDecryption=True)['Parameter']['Value'])\""
-    )
-
-    hf_fetch = ""
-    if a["hf_param"]:
-        hf_fetch = (
-            f'echo "HF_TOKEN=$({ssm_read.format(region=region, name=a["hf_param"])})" >> .env\n'
-        )
-
-    return f"""#!/bin/bash
-set -euxo pipefail
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -q
-apt-get install -yq docker.io docker-compose-v2 git python3-boto3
-systemctl enable --now docker
-
-git clone --depth 1 --branch {repo_ref} {repo_url} /opt/mcp-tools
-cd /opt/mcp-tools
-
-# Pin the guardrail's egress allowlist to this deploy's bedrock endpoint.
-sed -i -E 's/bedrock-runtime\\.[a-z0-9-]+\\.amazonaws\\.com/bedrock-runtime.{region}.amazonaws.com/' security/egress-proxy/allowlist/guardrail.txt
-
-# Tunnel credentials: SSM -> the gitignored path the compose overlay mounts.
-mkdir -p security/ingress/secrets
-{ssm_read.format(region=region, name=a["creds_param"])} \\
-  > security/ingress/secrets/creds.json
-chown 1000:1000 security/ingress/secrets/creds.json
-chmod 600 security/ingress/secrets/creds.json
-
-cat > .env <<'ENVEOF'
-{env_body}
-ENVEOF
-{hf_fetch}
-# The deploy reconciler: applies chat-approved tool deploys (deploy/host/README.md).
-python3 deploy/host/reconcile.py --init --repo /opt/mcp-tools --user root
-sed 's|__REPO__|/opt/mcp-tools|g; s|__RUN_AS__|root|g' deploy/host/mcp-reconciler.service \\
-  > /etc/systemd/system/mcp-reconciler.service
-systemctl daemon-reload && systemctl enable --now mcp-reconciler
-
-# Per-tool secrets (tools/<tool>/.env) arrive later over SSM; required:false in
-# compose lets the stack come up while a tool waits for its secrets.
-docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d --build{scale_off}
-"""
+    subs = {
+        "__REPO_URL__": repo_url,
+        "__REPO_REF__": repo_ref,
+        "__REGION__": region,
+        "__DOMAIN__": domain,
+        "__PROFILES__": ",".join(tools),
+        "__TUNNEL_ID__": a["tunnel_id"],
+        "__CREDS_PARAM__": a["creds_param"],
+        "__GUARDRAIL_ID__": a["guardrail_id"],
+    }
+    script = BOOT_TEMPLATE
+    for token, value in subs.items():
+        script = script.replace(token, value)
+    return script
 
 
 user_data = pulumi.Output.all(
     tunnel_id=tunnel_id,
     creds_param=creds_param.name,
-    guardrail_id=guardrail.guardrail_id if guardrail else "",
-    hf_param=hf_param.name if hf_param else "",
+    guardrail_id=guardrail.guardrail_id,
 ).apply(_user_data)
 
 instance = aws.ec2.Instance(
@@ -290,8 +201,6 @@ pulumi.export(
     pulumi.Output.concat("aws ssm start-session --target ", instance.id, " --region ", region),
 )
 pulumi.export("tunnelId", tunnel_id)
-pulumi.export(
-    "guardrailId", guardrail.guardrail_id if guardrail else "(guardrail: " + guardrail_mode + ")"
-)
+pulumi.export("guardrailId", guardrail.guardrail_id)
 pulumi.export("connectorUrls", [f"https://{t}.{domain}/mcp" for t in tools])
 pulumi.export("approvalUrl", f"https://approval.{domain}")

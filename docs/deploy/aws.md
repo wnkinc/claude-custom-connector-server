@@ -58,15 +58,10 @@ pulumi config set tools xmcp,telegram        # your pick of xmcp,data,lean,teleg
 backend; `organization` is the literal org name on the local/self-managed
 backend.)
 
-Guardrail: `bedrock` is the default — the Guardrail resource, IAM permission,
-and `.env` wiring all come out of `pulumi up`. Alternatives:
-
-```bash
-pulumi config set guardrail llamafirewall    # local model on the VM instead
-pulumi config set --secret hfToken hf_...    #   + HF token (see the local runbook
-                                             #     for the model-access request)
-pulumi config set guardrail off              # unscreened; your call
-```
+Guardrail: a cloud deploy is always bedrock-screened — the Guardrail resource,
+IAM permission, and `.env` wiring all come out of `pulumi up`, nothing to
+configure. (The local-model provider, llamafirewall, is a local-path option;
+see the [local runbook](local.md).)
 
 Sizing: defaults are `t3.small` + 20 GB gp3 — right for the light tools
 (`xmcp`, `telegram`); the always-on substrate is small, and on this path the
@@ -79,7 +74,7 @@ Running your own fork / a pinned version: `pulumi config set repoUrl <fork>`,
 ## 3. `pulumi up`
 
 Creates: the Bedrock Guardrail (prompt-attack filter only), an instance role
-(SSM + `ApplyGuardrail` + the two boot-secret reads), a zero-inbound security
+(SSM + `ApplyGuardrail` + the boot-secret read), a zero-inbound security
 group, and the VM — whose first boot installs docker, clones the repo, renders
 the root `.env`, fetches the tunnel credentials from SSM, and runs
 `docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d --build`.
@@ -185,11 +180,10 @@ Then Claude → Settings → Connectors → Add custom connector → each URL fr
 - **Stack up, connector says "couldn't connect"** — on the VM check
   `sudo docker compose ps` (is `cloudflared` up?) and
   `sudo docker compose logs cloudflared` (creds/route errors appear here).
-- **Guardrail container unhealthy in bedrock mode** — its startup warmup
-  validates region, guardrail id, IAM, and the egress path in one call;
-  `sudo docker compose logs guardrail` names the failing piece. The egress
-  allowlist is region-pinned at boot; if you changed regions by hand, fix
-  `security/egress-proxy/allowlist/guardrail.txt` and
-  `sudo docker compose restart egress guardrail`.
+- **Guardrail container unhealthy** — its startup warmup validates region,
+  guardrail id, IAM, and the egress path in one call;
+  `sudo docker compose logs guardrail` names the failing piece. (The egress
+  wall admits `bedrock-runtime` in every region, so region changes need no
+  allowlist edit.)
 - **Auth/OAuth issues** — identical to local; see the
   [local runbook's troubleshooting](local.md#troubleshooting).

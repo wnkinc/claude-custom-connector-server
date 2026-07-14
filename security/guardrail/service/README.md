@@ -65,8 +65,9 @@ The sidecar's egress goes through the wall on its own listener
   the `guardrail-hf-cache` volume; scans run offline from then on. An air-gapped
   alternative stays available — populate the cache volume out-of-band from any
   machine and the service picks it up on restart.
-- **bedrock:** the API call leaves through the same listener, allowlisted to the
-  region's `bedrock-runtime` endpoint. On EC2 the instance-role credential
+- **bedrock:** the API call leaves through the same listener; a regex ACL in
+  `squid.compose.conf` admits `bedrock-runtime` in every region (the endpoint
+  name is region-specific). On EC2 the instance-role credential
   lookup (IMDS) also rides the wall — a pinned plain-HTTP allow in
   `squid.compose.conf`, because the sealed internal network has no link-local
   route.
