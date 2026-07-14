@@ -60,6 +60,23 @@ def test_manifests_found():
     assert len(TOOLS) >= 5, f"expected the shipped tools' manifests, found only {TOOLS}"
 
 
+# Identities the substrate already claims: subdomains routed by the overlay and
+# MCP ports baked into always-on services. A new tool may not collide with them.
+_RESERVED_SUBDOMAINS = {"approval", "gatekeeper"}
+_RESERVED_MCP_PORTS = {8065, 8071, 8072}  # gatekeeper, guardrail, approval
+
+
+def test_no_identity_collisions():
+    subs = [m["subdomain"] for m in MANIFESTS.values()]
+    dupes = {s for s in subs if subs.count(s) > 1} | (set(subs) & _RESERVED_SUBDOMAINS)
+    assert not dupes, f"subdomain collision(s): {sorted(dupes)}"
+    ports = [m["port"] for m in MANIFESTS.values()]
+    port_dupes = {p for p in ports if ports.count(p) > 1} | (set(ports) & _RESERVED_MCP_PORTS)
+    assert not port_dupes, f"MCP port collision(s): {sorted(port_dupes)}"
+    eports = re.findall(r"^http_port +(\d+)", SQUID, re.M)
+    assert len(eports) == len(set(eports)), f"duplicate egress listener ports: {sorted(eports)}"
+
+
 @pytest.mark.parametrize("name", TOOLS)
 def test_compose_service_shape(name):
     svc = BASE["services"].get(name)
