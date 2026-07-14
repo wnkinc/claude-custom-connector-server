@@ -2,7 +2,7 @@
 # Portable substrate for the data TOOL (see docs/SUBSTRATE.md). Same shape as
 # tools/xmcp/Dockerfile; data is a TRUSTED tool. BUILD CONTEXT = repo root:
 #   docker build -f tools/data/Dockerfile -t mcp-data .
-ARG BASE=public.ecr.aws/amazonlinux/amazonlinux@sha256:336b735f8f0aa1d591802beb01d2ef85c6a4a3f411ea4ffa35cad8ba5db282af
+ARG BASE=public.ecr.aws/amazonlinux/amazonlinux@sha256:590b8c9fdab65c7f5b8a2392739104ed6bc5055433ba8ff2bf0d2fa500db2ea3
 
 # --- builder: resolve the venv from the hashed lock, then PREBUILD OpenBB ------------
 FROM ${BASE} AS builder
