@@ -189,7 +189,10 @@ async def deploy_status() -> str:
 @mcp.tool
 async def deploy_tool(name: str) -> str:
     """Deploy an available, not-yet-deployed tool from the codebase (one at a
-    time). Requires the
+    time). IMPORTANT: if the tool lists prerequisites (deploy_status shows them --
+    browser steps like OAuth redirect URIs or enabling APIs), CONFIRM with the
+    user that they are done BEFORE calling this: the deploy itself succeeds
+    without them, but the tool then fails at first use. Requires the
     user's approval, then the host reconciler applies it: profile added, image
     built, container up -- progress and results via deploy_status. Prerequisite:
     the tool's secrets staged on the host (deploy_status shows staged/missing).
@@ -236,10 +239,18 @@ async def deploy_tool(name: str) -> str:
             f"⚠️ Deploy request refused: {data.get('error', 'unknown error')}. Nothing was changed."
         )
     notes = "; ".join(manifests[name].get("notes", [])[:2])
+    prereqs = manifests[name].get("prerequisites", [])
+    prereq_note = (
+        " REMIND the user of this tool's browser prerequisites if not already "
+        "done (the tool fails at first use without them): " + " | ".join(prereqs)
+        if prereqs
+        else ""
+    )
     return (
         f"🚀 Deploy of `{name}` requested (id {data['id']}) -- the host reconciler is "
         f"applying it now. Track progress with deploy_status."
         + (f" Notes: {notes}" if notes else "")
+        + prereq_note
         + " When it's up, add the connector in claude.ai "
         f"(https://{manifests[name]['subdomain']}.<your-domain>/mcp)."
     )
