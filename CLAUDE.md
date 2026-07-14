@@ -15,13 +15,13 @@ security/                  # shared plumbing, imported by every tool
   ingress/                 #   tunnel creds staging (gitignored; routing lives in the overlay)
   guardrail/service/       #   output-screen sidecar; GUARDRAIL_PROVIDER=llamafirewall|bedrock
                            #     (proves detection at startup: broken screen = unhealthy container)
-tools/                     # one tool per dir: server.py + Dockerfile + requirements.lock
-  xmcp/                    #   X API full surface (reads + OAuth1 user-context writes) (:8061)
-  data/                    #   market data via OpenBB -> parquet lake (:8062)
-  lean/                    #   QuantConnect Lean backtests of agent-authored algorithms (:8064)
-  gatekeeper/              #   control plane over every tool's approval mode (:8065; docs/GATEKEEPER.md)
-deploy/                    # IaC: cloudflare/ = shared ingress (tunnel+DNS, both paths);
-                           #   aws/ = EC2 VM running this stack (reads the ingress stack)
-scripts/new-tool.sh        # stamp a new tool
+  test_stack.py            #   stack-consistency validator (CI): the add-a-tool wiring rules
+tools/                     # one tool per dir: server.py + Dockerfile + requirements.lock +
+                           #   deploy.json. WHICH tools exist and what each is: the README's
+                           #   "The tools" table (the deploy.json manifests are the machine source)
+deploy/                    # cloudflare/ = shared ingress (tunnel+DNS, both paths);
+                           #   aws/ = EC2 VM running this stack (reads the ingress stack);
+                           #   host/ = deploy reconciler (chat-approved deploys; its README)
+scripts/new-tool.sh        # stamp a new tool (.claude/skills/new-tool = the decision procedure)
 docs/                      # DEPLOY.md chooser -> deploy/{local,aws}.md runbooks; ARCHITECTURE.md
 ```

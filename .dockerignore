@@ -10,7 +10,6 @@
 vendor/
 docs/
 scripts/
-fuckme.md
 
 # Secrets & host state -- env is injected by the substrate (compose / task def), never baked.
 **/.env
