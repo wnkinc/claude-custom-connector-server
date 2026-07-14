@@ -12,7 +12,7 @@ From the repo root:
 
 ```bash
 sudo python3 deploy/host/reconcile.py --init --repo $(pwd) --user $(whoami)
-sed "s|__REPO__|$(pwd)|; s|__RUN_AS__|$(whoami)|" deploy/host/mcp-reconciler.service \
+sed "s|__REPO__|$(pwd)|g; s|__RUN_AS__|$(whoami)|g" deploy/host/mcp-reconciler.service \
   | sudo tee /etc/systemd/system/mcp-reconciler.service
 sudo systemctl daemon-reload && sudo systemctl enable --now mcp-reconciler
 ```

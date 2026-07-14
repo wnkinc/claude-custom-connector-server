@@ -3,7 +3,7 @@
 The approval sidecar is the sole authority on tool modes (see
 security/approval/gating.py): each approval-enabled server registers its full tool
 catalog there, every tool defaults to always_allow, and the operator's choices are
-stored per (source, tool). Four tools:
+stored per (source, tool). Five tools:
 
   - deploy_status() -- read-only deployment inventory: what's running (live startup
         beacons), what's stale, and what else the codebase ships (tools/*/deploy.json
@@ -13,6 +13,9 @@ stored per (source, tool). Four tools:
         a human approves every deploy). Only ever writes a request; the HOST
         reconciler (deploy/host/) validates and applies it. Secrets never pass
         through here -- they're staged on the host, this only checks readiness.
+  - stage_secrets(name) -- in-chat secrets form (a widget): the user types the
+        tool's API keys into the form, values POST browser->sidecar->reconciler,
+        never through chat (see security/approval/secrets_widget.py).
 
   - manage_tools()  -- the in-chat permissions panel (a widget, one section per
         connector; see security/approval/manage_widget.py). The human review-and-save
@@ -42,6 +45,7 @@ from fastmcp import FastMCP
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from security.approval.manage_widget import register_manage_widget  # noqa: E402
+from security.approval.secrets_widget import register_secrets_widget  # noqa: E402
 from security.serve import serve  # noqa: E402
 
 mcp = FastMCP(name="gatekeeper")
@@ -100,7 +104,7 @@ def format_deploy_status(
         lines.append(f"  - {src}: {st['tools']} tools, last used {_ago(st.get('seen'), now)}")
     stale = sorted(s for s in sources if s not in fresh and s != "gatekeeper")
     if stale:
-        lines.append("Stale (stored state, no live server -- forgettable in the manage panel):")
+        lines.append("Stale (stored state, no live server):")
         for src in stale:
             lines.append(f"  - {src}: last registered {_ago(sources[src].get('registered'), now)}")
     undeployed = sorted(p for p in manifests if p not in fresh)
@@ -144,8 +148,9 @@ def format_deploy_status(
                 )
             if undeployed:
                 lines.append(
-                    "To deploy: stage the tool's secrets in tools/<name>/.env on the host "
-                    "(deploy_status shows when they're staged), make sure "
+                    "To deploy: stage the tool's secrets -- stage_secrets(<name>) opens an "
+                    "in-chat form (values go directly to the server, never through chat), "
+                    "or fill tools/<name>/.env on the host -- make sure "
                     "https://<subdomain>.<your-domain>/auth/callback is on the shared Google "
                     "OAuth client, then call deploy_tool(<name>) -- it needs the user's "
                     "approval, applies via the host reconciler, and finishes with adding "
@@ -166,10 +171,10 @@ def format_deploy_status(
 @mcp.tool
 async def deploy_status() -> str:
     """What this deployment serves and what else it could: deployed tools (with
-    last-used), stale leftovers, and undeployed tools from the codebase with the
-    secrets/notes enabling each would involve -- plus whether their secrets are
-    staged and how any in-flight deploy is progressing. Read-only; the free
-    companion to deploy_tool."""
+    last-used), stale leftovers, and available not-yet-deployed tools from the
+    codebase with the secrets/notes enabling each would involve -- plus whether
+    their secrets are staged and how any in-flight deploy is progressing.
+    Read-only; the free companion to deploy_tool."""
     async with httpx.AsyncClient(timeout=10) as client:
         src_resp = await client.get(f"{APPROVAL_URL}/sources")
         dep_resp = await client.get(f"{APPROVAL_URL}/deploy/state")
@@ -178,7 +183,8 @@ async def deploy_status() -> str:
 
 @mcp.tool
 async def deploy_tool(name: str) -> str:
-    """Deploy an undeployed tool from the codebase (one at a time). Requires the
+    """Deploy an available, not-yet-deployed tool from the codebase (one at a
+    time). Requires the
     user's approval, then the host reconciler applies it: profile added, image
     built, container up -- progress and results via deploy_status. Prerequisite:
     the tool's secrets staged on the host (deploy_status shows staged/missing).
@@ -213,10 +219,9 @@ async def deploy_tool(name: str) -> str:
             inv.get("missing_secrets") or [s["key"] for s in manifests[name]["secrets"]]
         )
         return (
-            f"⚠️ `{name}`'s secrets aren't staged yet (missing: {missing}). Fill "
-            f"tools/{name}/.env on the host (its env.example is the template; "
-            "deploy_status shows each secret's source), then call this again. "
-            "Nothing was changed."
+            f"⚠️ `{name}`'s secrets aren't staged yet (missing: {missing}). Open the "
+            f"in-chat form with stage_secrets('{name}') -- or fill tools/{name}/.env "
+            "on the host directly -- then call this again. Nothing was changed."
         )
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(f"{APPROVAL_URL}/deploy/request", json={"tool": name})
@@ -268,8 +273,10 @@ async def set_gating(
 
 def main() -> None:
     port = int(os.getenv("MCP_PORT", "8065"))
-    # The in-chat permissions panel (manage_tools + its ui:// resource).
+    # The in-chat permissions panel (manage_tools + its ui:// resource) and the
+    # secrets-staging form (stage_secrets) -- both human-input widgets.
     register_manage_widget(mcp)
+    register_secrets_widget(mcp, load_manifests)
     # Tools default to always_allow like everything else -- EXCEPT set_gating,
     # which the sidecar pins to needs_approval (see _PINNED in its service.py).
     serve(mcp, port=port, require_approval=True)
