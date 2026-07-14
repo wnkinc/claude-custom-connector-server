@@ -105,11 +105,71 @@ def env_values(env_path: Path) -> dict[str, str]:
     return env_values_from_text(env_path.read_text())
 
 
+def shared_identity_values(repo: Path, exclude_tool: str) -> dict[str, str]:
+    """The deployment-wide values (MCP-auth identity) from the first sibling tool
+    .env that carries them all -- the source both kinds of seeding draw from."""
+    for sibling in sorted((repo / "tools").glob("*/.env")):
+        if sibling.parent.name == exclude_tool:
+            continue
+        values = env_values(sibling)
+        if all(values.get(k) for k in SHARED_IDENTITY_KEYS):
+            return values
+    return {}
+
+
+def resolve_default(secret: dict, shared: dict) -> str:
+    """A manifest secret's default_from value, adapted where shapes differ
+    (an email allowlist is a comma list; a single-user email is its first entry)."""
+    source = secret.get("default_from", "")
+    value = shared.get(source, "")
+    if source == "MCP_ALLOWED_GOOGLE_EMAILS" and value:
+        value = value.split(",")[0].strip()
+    return value
+
+
 def secrets_state(repo: Path, manifest: dict) -> tuple[bool, list[str]]:
-    """(ready, missing_keys): every manifest secret has a non-empty value staged."""
+    """(ready, missing_keys): every manifest secret has a non-empty value staged
+    OR a resolvable default (default_from a deployment-wide value) -- those are
+    filled at deploy time, so the user is never asked for what the stack knows."""
     values = env_values(repo / "tools" / manifest["profile"] / ".env")
-    missing = [s["key"] for s in manifest.get("secrets", []) if not values.get(s["key"])]
+    shared = shared_identity_values(repo, manifest["profile"])
+    missing = [
+        s["key"]
+        for s in manifest.get("secrets", [])
+        if not values.get(s["key"]) and not resolve_default(s, shared)
+    ]
     return (not missing, missing)
+
+
+def materialize_env(repo: Path, tool: str, manifest: dict) -> None:
+    """Ensure tools/<tool>/.env exists and carries everything not user-supplied:
+    the template, the shared MCP-auth identity, and manifest default_from fills."""
+    env_path = repo / "tools" / tool / ".env"
+    if not env_path.exists():
+        template = repo / "tools" / tool / "env.example"
+        env_path.write_text(template.read_text() if template.exists() else "")
+        os.chmod(env_path, 0o600)
+    text = seed_shared_identity(repo, tool, env_path.read_text())
+    have = env_values_from_text(text)
+    shared = shared_identity_values(repo, tool)
+    filled = []
+    for secret in manifest.get("secrets", []):
+        key = secret["key"]
+        if have.get(key):
+            continue
+        value = resolve_default(secret, shared)
+        if not value:
+            continue
+        pattern = re.compile(rf"^#?\s*{re.escape(key)}=.*$", re.MULTILINE)
+        if pattern.search(text):
+            text = pattern.sub(lambda _m, k=key, v=value: f"{k}={v}", text, count=1)
+        else:
+            text = text.rstrip("\n") + f"\n{key}={value}\n"
+        filled.append(key)
+    env_path.write_text(text)
+    os.chmod(env_path, 0o600)
+    if filled:
+        log(f"defaulted {', '.join(filled)} in tools/{tool}/.env from the shared identity")
 
 
 def compose_cmd(repo: Path) -> list[str]:
@@ -181,6 +241,9 @@ def process_request(repo: Path, req: dict, manifests: dict) -> dict:
     ready, missing = secrets_state(repo, manifests[tool])
     if not ready:
         return fail(f"secrets not staged for {tool}: missing {', '.join(missing)}")
+    # Fill defaults (shared identity + manifest default_from) so a tool whose every
+    # secret is deployment-derivable deploys with no staging step at all.
+    materialize_env(repo, tool, manifests[tool])
 
     write_json(
         control_dir(repo) / "status.json",
@@ -315,7 +378,6 @@ def apply_staging(repo: Path, manifests: dict) -> None:
         env_path.write_text(template.read_text() if template.exists() else "")
         os.chmod(env_path, 0o600)
     text = env_path.read_text()
-    text = seed_shared_identity(repo, tool, text)
     for key, value in values.items():
         pattern = re.compile(rf"^#?\s*{re.escape(key)}=.*$", re.MULTILINE)
         if pattern.search(text):
@@ -326,6 +388,9 @@ def apply_staging(repo: Path, manifests: dict) -> None:
             text = text.rstrip("\n") + f"\n{key}={value}\n"
     env_path.write_text(text)
     os.chmod(env_path, 0o600)
+    # User values are in; now fill everything the deployment already knows
+    # (shared identity + manifest default_from) around them.
+    materialize_env(repo, tool, manifest)
     write_json(path, {})  # consumed: values no longer at rest in the control dir
     log(f"staged {len(values)} secret value(s) into tools/{tool}/.env")
 

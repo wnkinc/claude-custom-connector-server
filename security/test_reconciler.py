@@ -222,3 +222,65 @@ def test_deploy_done_requires_running_and_healthy(repo):
     rec.run_once(repo)
     st = _status(repo)
     assert st["phase"] == "done" and "healthy" in st["detail"]
+
+
+def _defaultable_manifest(repo):
+    # A workspace-shaped manifest: every secret defaults from the shared identity.
+    (repo / "tools" / "weather" / "deploy.json").write_text(
+        json.dumps(
+            {
+                "title": "Weather",
+                "profile": "weather",
+                "subdomain": "weather",
+                "port": 8070,
+                "summary": "weather",
+                "secrets": [
+                    {
+                        "key": "W_OAUTH_ID",
+                        "label": "id",
+                        "hint": "h",
+                        "default_from": "GOOGLE_CLIENT_ID",
+                    },
+                    {
+                        "key": "W_EMAIL",
+                        "label": "email",
+                        "hint": "h",
+                        "default_from": "MCP_ALLOWED_GOOGLE_EMAILS",
+                    },
+                ],
+                "notes": [],
+                "depends": [],
+            }
+        )
+    )
+    (repo / "tools" / "other").mkdir()
+    (repo / "tools" / "other" / ".env").write_text(
+        "GOOGLE_CLIENT_ID=shared-id\nGOOGLE_CLIENT_SECRET=shared-secret\n"
+        "MCP_ALLOWED_GOOGLE_EMAILS=me@example.com,alt@example.com\n"
+    )
+
+
+def test_defaultable_secrets_count_as_ready_and_deploy_with_no_staging(repo):
+    _defaultable_manifest(repo)
+    rec.run_once(repo)
+    inv = rec.read_json(rec.control_dir(repo) / "inventory.json")["tools"]["weather"]
+    # Nothing staged, but everything derivable -> ready; the user is never asked.
+    assert inv == {"deployed": False, "secrets_ready": True, "missing_secrets": []}
+    _request(repo, rid="r-defaults")
+    rec.run_once(repo)
+    assert _status(repo)["phase"] == "done"
+    text = (repo / "tools" / "weather" / ".env").read_text()
+    assert "W_OAUTH_ID=shared-id" in text
+    assert "W_EMAIL=me@example.com" in text  # first allowlist entry, not the list
+    assert "GOOGLE_CLIENT_ID=shared-id" in text  # shared identity seeded too
+
+
+def test_user_staged_value_beats_the_default(repo):
+    _defaultable_manifest(repo)
+    rec.write_json(
+        rec.control_dir(repo) / "staging.json",
+        {"id": "s-override", "tool": "weather", "values": {"W_OAUTH_ID": "my-own-client"}},
+    )
+    rec.run_once(repo)
+    text = (repo / "tools" / "weather" / ".env").read_text()
+    assert "W_OAUTH_ID=my-own-client" in text and "W_EMAIL=me@example.com" in text

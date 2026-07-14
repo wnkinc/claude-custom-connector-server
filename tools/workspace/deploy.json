@@ -8,17 +8,20 @@
     {
       "key": "GOOGLE_OAUTH_CLIENT_ID",
       "label": "Google OAuth client ID (workspace access)",
-      "hint": "reuse the stack's shared client — Google Cloud Console → Credentials; also add https://workspace.<your-domain>/oauth2callback to its authorized redirect URIs"
+      "hint": "leave blank to reuse the deployment's shared Google client (recommended); make sure it has the /oauth2callback redirect URI",
+      "default_from": "GOOGLE_CLIENT_ID"
     },
     {
       "key": "GOOGLE_OAUTH_CLIENT_SECRET",
       "label": "Google OAuth client secret",
-      "hint": "same client's secret"
+      "hint": "leave blank to reuse the shared client's secret",
+      "default_from": "GOOGLE_CLIENT_SECRET"
     },
     {
       "key": "USER_GOOGLE_EMAIL",
       "label": "Your Google account email",
-      "hint": "the single-user account the tools act as"
+      "hint": "leave blank to use the deployment's allowlisted email",
+      "default_from": "MCP_ALLOWED_GOOGLE_EMAILS"
     }
   ],
   "prerequisites": [
