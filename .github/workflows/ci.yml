@@ -46,6 +46,8 @@ jobs:
             lock: tools/telegram/requirements.lock
           - tests: tools/workspace
             lock: tools/workspace/requirements.lock
+          - tests: tools/gatekeeper
+            lock: tools/gatekeeper/requirements.lock
           # security/ has no lock of its own; xmcp is the max-posture tool, so its
           # lock covers every shared layer (auth + approval + guardrail).
           - tests: security
@@ -71,9 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # The real .env files are gitignored secrets, but compose hard-fails on a
-      # missing env_file -- empty stubs are enough for config validation.
-      - run: for t in xmcp data lean telegram; do touch tools/$t/.env; done
+      # No .env stubs needed: every env_file is `required: false`.
       - name: validate local posture
         run: docker compose config -q
       # The tunnel overlay requires the deployment identity (root .env); validate
