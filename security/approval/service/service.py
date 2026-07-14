@@ -37,6 +37,8 @@ import re
 import secrets
 import time
 import urllib.parse
+from collections.abc import Awaitable, Callable
+from typing import NamedTuple
 
 import httpx
 from nacl.exceptions import BadSignatureError
@@ -51,60 +53,56 @@ log = logging.getLogger("approval")
 _PENDING: dict[str, dict] = {}
 _TTL_SECONDS = 600  # approval links expire after 10 minutes
 
+
 # The out-of-band platform that delivers approval cards.
 # Human-in-the-loop only works if the platform is one the agent does NOT operate:
 # a card the agent's tools can see and press is a gate that approves itself. This
 # is allowed but load-bearing on operator judgment -- most sharply for telegram,
 # where running this provider on the same account the telegram TOOL operates lets
 # the agent read the card and (if it can send) press its own buttons.
-_PROVIDERS_IMPLEMENTED = {"slack", "discord", "telegram"}
-_PROVIDERS_PLANNED: set[str] = set()
-
-# Human-readable name of the ACTIVE provider, so the model-facing gate message can
-# say "posted to your Telegram approval channel" instead of guessing (or naming the
-# wrong platform). The tool process doesn't know APPROVAL_PROVIDER -- only the
-# sidecar does -- so /gate hands this back and the middleware surfaces it.
-_PROVIDER_LABELS = {"slack": "Slack", "discord": "Discord", "telegram": "Telegram"}
-
-
-def _channel_label() -> str:
-    return _PROVIDER_LABELS.get(_provider(), "")
+#
+# Each provider is one registry entry: the label (for the model-facing "posted to
+# your X channel" text -- the tool process doesn't know APPROVAL_PROVIDER, so /gate
+# hands the label back and the middleware surfaces it), the is-it-configured check,
+# and the card-post fn. _PROVIDERS itself is bound BELOW the provider sections that
+# define those functions; everything here reads it at call time. Adding a provider
+# = its _<name>_enabled + _<name>_post_approval + signed interact route + one entry.
+class _Provider(NamedTuple):
+    label: str
+    enabled: Callable[[], bool]
+    post: Callable[..., Awaitable[bool]]
 
 
 def _provider() -> str:
     return os.getenv("APPROVAL_PROVIDER", "slack").strip().lower()
 
 
+def _channel_label() -> str:
+    entry = _PROVIDERS.get(_provider())
+    return entry.label if entry else ""
+
+
 def _channel_configured() -> bool:
     """Does the ACTIVE provider have the env it needs to reach a human?"""
-    return {
-        "slack": _slack_enabled,
-        "discord": _discord_enabled,
-        "telegram": _telegram_enabled,
-    }.get(_provider(), lambda: False)()
+    entry = _PROVIDERS.get(_provider())
+    return entry.enabled() if entry else False
 
 
 async def _notify(token: str, action: str, source: str) -> bool:
     """Deliver the approval card via the configured provider.
 
-    Returns True only when a human was actually notified; an unknown or
-    not-yet-implemented provider fails closed (False => the gate reports the
-    approval as undeliverable).
+    Returns True only when a human was actually notified; an unknown provider
+    fails closed (False => the gate reports the approval as undeliverable).
     """
-    provider = _provider()
-    if provider == "slack":
-        return await _slack_post_approval(token, action, source)
-    if provider == "discord":
-        return await _discord_post_approval(token, action, source)
-    if provider == "telegram":
-        return await _telegram_post_approval(token, action, source)
-    log.error(
-        "APPROVAL_PROVIDER=%r is not implemented (implemented: %s; planned: %s)",
-        provider,
-        sorted(_PROVIDERS_IMPLEMENTED),
-        sorted(_PROVIDERS_PLANNED),
-    )
-    return False
+    entry = _PROVIDERS.get(_provider())
+    if entry is None:
+        log.error(
+            "APPROVAL_PROVIDER=%r is not implemented (implemented: %s)",
+            _provider(),
+            sorted(_PROVIDERS),
+        )
+        return False
+    return await entry.post(token, action, source)
 
 
 def _prune() -> None:
@@ -614,6 +612,15 @@ async def telegram_interact(request):  # type: ignore[no-untyped-def]
     return Response(status_code=200)
 
 
+# The provider registry (contract documented at _Provider above) -- bound here,
+# after the three providers' functions exist.
+_PROVIDERS = {
+    "slack": _Provider("Slack", _slack_enabled, _slack_post_approval),
+    "discord": _Provider("Discord", _discord_enabled, _discord_post_approval),
+    "telegram": _Provider("Telegram", _telegram_enabled, _telegram_post_approval),
+}
+
+
 # ---------------------------------------------------------------------------
 # Tool catalog + modes: the sidecar is the SOLE authority on every tool's mode
 # ("always_allow" | "needs_approval" | "blocked"). Each approval-enabled server
@@ -1053,7 +1060,7 @@ async def healthz(request):  # type: ignore[no-untyped-def]
     provider = _provider()
     return JSONResponse(
         {
-            "ok": provider in _PROVIDERS_IMPLEMENTED,
+            "ok": provider in _PROVIDERS,
             "provider": provider,
             "channel": "configured" if _channel_configured() else "unconfigured",
             "public_url_set": bool(os.getenv("APPROVAL_PUBLIC_URL")),
@@ -1088,11 +1095,10 @@ if __name__ == "__main__":
 
     # Fail fast on a typo'd/unimplemented provider rather than booting a sidecar
     # that silently reports every approval undeliverable.
-    if _provider() not in _PROVIDERS_IMPLEMENTED:
+    if _provider() not in _PROVIDERS:
         raise SystemExit(
             f"APPROVAL_PROVIDER={_provider()!r} is not implemented "
-            f"(implemented: {sorted(_PROVIDERS_IMPLEMENTED)}; "
-            f"planned: {sorted(_PROVIDERS_PLANNED)})"
+            f"(implemented: {sorted(_PROVIDERS)})"
         )
     _load_state()
     if not _state_file():

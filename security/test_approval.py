@@ -49,12 +49,15 @@ def clean(monkeypatch):
 
 @pytest.fixture
 def slack_ok(monkeypatch):
-    """Pretend the Slack card was delivered (the notified=True path)."""
+    """Pretend the Slack card was delivered (the notified=True path). The provider
+    registry holds direct references, so the dispatch table is the patch point."""
 
     async def _posted(token, action, source):
         return True
 
-    monkeypatch.setattr(svc, "_slack_post_approval", _posted)
+    monkeypatch.setitem(
+        svc._PROVIDERS, "slack", svc._Provider("Slack", svc._slack_enabled, _posted)
+    )
 
 
 def _gate(client, source="teltool", action="send_message(m='hi')", key="k1"):
@@ -133,8 +136,11 @@ def test_notify_dispatches_to_the_configured_provider(monkeypatch):
     async def _slack(token, action, source):  # pragma: no cover - must not run
         raise AssertionError("slack called while APPROVAL_PROVIDER=discord")
 
-    monkeypatch.setattr(svc, "_discord_post_approval", _discord)
-    monkeypatch.setattr(svc, "_slack_post_approval", _slack)
+    # The registry holds direct references, so the dispatch table is the patch point.
+    monkeypatch.setitem(
+        svc._PROVIDERS, "discord", svc._Provider("Discord", svc._discord_enabled, _discord)
+    )
+    monkeypatch.setitem(svc._PROVIDERS, "slack", svc._Provider("Slack", svc._slack_enabled, _slack))
     monkeypatch.setenv("APPROVAL_PROVIDER", "discord")
     assert _gate(TestClient(svc.app))["notified"] is True
     assert delivered == ["teltool"]
