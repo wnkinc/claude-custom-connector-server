@@ -77,7 +77,7 @@ cat > "$DIR/env.example" <<ENV
 MCP_AUTH_ENABLED=1
 # MCP_PUBLIC_URL is stamped by the tunnel overlay from the root .env's MCP_DOMAIN;
 # set it here only when running outside compose.
-#MCP_PUBLIC_URL=https://${SUBDOMAIN}
+#MCP_PUBLIC_URL=https://${NAME}.example.com
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 MCP_ALLOWED_GOOGLE_EMAILS=
@@ -173,7 +173,6 @@ whatever is still missing (compose/egress/ingress/ports):
   2. Tests + CI: write tools/${NAME}/test_${ACL}.py (thin server tests; copy an
      existing tool's), then wire CI in .github/:
        - workflows/ci.yml: a pytest matrix entry (tests: tools/${NAME}, lock: its lock)
-         and tools/${NAME} in the compose-validate '.env stub' loop
        - dependabot.yml: /tools/${NAME} under the pip 'directories:' list
   3. Egress: add a listener to security/egress-proxy/squid.compose.conf (before 'deny all'):
          http_port ${EPORT} name=${NAME}

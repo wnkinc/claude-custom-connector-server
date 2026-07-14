@@ -260,9 +260,10 @@ async def deploy_tool(name: str) -> str:
 async def set_gating(
     tool: str,
     mode: Literal["always_allow", "needs_approval", "blocked"],
-    source: str = "telegram",
+    source: str,
 ) -> str:
-    """Set a tool's mode on `source`: 'always_allow' runs with no approval card,
+    """Set a tool's mode on `source` (the connector the tool belongs to, e.g.
+    'telegram' -- deploy_status lists them): 'always_allow' runs with no approval card,
     'needs_approval' needs a human approval per call, 'blocked' disables the tool
     outright (calls refuse immediately, and it disappears from Claude's tool list
     once the connector refreshes).

@@ -112,9 +112,8 @@ inserts the compose service (opt-in `profiles:` entry + state volume) into
 1. **Lock deps** — `uv pip compile --generate-hashes` → `requirements.lock`
    (CI installs locks in `--require-hashes` mode, so an unlocked dep can't merge).
 2. **Tests + CI** — write a thin `test_<name>.py` (copy an existing tool's), then the
-   three CI touchpoints in `.github/`: a pytest matrix entry in `workflows/ci.yml`,
-   the tool's directory in `dependabot.yml`, and the tool in compose-validate's
-   `.env` stub loop.
+   two CI touchpoints in `.github/`: a pytest matrix entry in `workflows/ci.yml`
+   and the tool's directory in `dependabot.yml`.
 3. **Egress** — a listener in `security/egress-proxy/squid.compose.conf` + only the
    hosts this tool must reach in its allowlist file.
 4. **Ingress** — a hostname route in the cloudflared `configs:` block of
