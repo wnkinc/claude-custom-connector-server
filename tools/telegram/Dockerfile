@@ -2,7 +2,7 @@
 # Portable substrate for the telegram tool (stamped by scripts/new-tool.sh).
 # BUILD CONTEXT = repo root, because the tool imports the shared ./security package:
 #   docker build -f tools/telegram/Dockerfile -t mcp-telegram .
-ARG BASE=public.ecr.aws/amazonlinux/amazonlinux@sha256:336b735f8f0aa1d591802beb01d2ef85c6a4a3f411ea4ffa35cad8ba5db282af
+ARG BASE=public.ecr.aws/amazonlinux/amazonlinux@sha256:590b8c9fdab65c7f5b8a2392739104ed6bc5055433ba8ff2bf0d2fa500db2ea3
 
 # --- builder: resolve the venv from the hashed lock (tamper-evident install) ----------
 FROM ${BASE} AS builder
