@@ -2,17 +2,18 @@
 
 One `pulumi up` gives you the same stack a local deploy runs — the compose file,
 the egress wall, the tunnel ingress — on an EC2 VM, with the guardrail backed by
-an Amazon Bedrock Guardrail instead of a local model. Ingress comes from the
-shared [deploy/cloudflare](../cloudflare/) stack (run it first); this stack is
-compute + guardrail + boot secrets. The full step-by-step runbook (including the
-manual pieces: Google OAuth client, per-tool secrets, optional Slack app) lives
-at [docs/deploy/aws.md](../../docs/deploy/aws.md).
+an Amazon Bedrock Guardrail instead of a local model (a cloud deploy is always
+bedrock-screened; the local-model provider stays a local-path option). Ingress
+comes from the shared [deploy/cloudflare](../cloudflare/) stack (run it first);
+this stack is compute + guardrail + the boot secret. The full step-by-step
+runbook (including the manual pieces: Google OAuth client, per-tool secrets,
+optional Slack app) lives at [docs/deploy/aws.md](../../docs/deploy/aws.md).
 
 What the program creates: an EC2 instance (zero-inbound security group; admin
-via SSM Session Manager), a Bedrock Guardrail (prompt-attack filter), an
-instance role scoped to `ApplyGuardrail` + the two SSM boot secrets.
-`pulumi destroy` removes all of it; the tunnel and DNS live on in the
-cloudflare stack.
+via SSM Session Manager; first boot runs `userdata.sh`), a Bedrock Guardrail
+(prompt-attack filter), an instance role scoped to `ApplyGuardrail` + the SSM
+boot secret. `pulumi destroy` removes all of it; the tunnel and DNS live on in
+the cloudflare stack.
 
 ## Quickstart
 
@@ -27,9 +28,8 @@ pulumi config set cloudflareStack organization/mcp-tools-cloudflare/prod
 pulumi up
 ```
 
-Config surface (defaults in parentheses): `tools` (`xmcp,telegram`), `guardrail`
-(`bedrock` | `llamafirewall` | `off`), `hfToken` (secret; llamafirewall mode),
-`repoUrl` (upstream), `repoRef` (`main` — pin a tag for reproducible deploys),
+Config surface (defaults in parentheses): `tools` (`xmcp,telegram`), `repoUrl`
+(upstream), `repoRef` (`main` — pin a tag for reproducible deploys),
 `instanceType` (`t3.small` — sized for the light tools), `volumeGb` (`20`;
 enabling `lean` wants ≥ 100 and a bigger instance — its base image alone is
 13 GB).

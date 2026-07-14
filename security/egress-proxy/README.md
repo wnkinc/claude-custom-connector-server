@@ -46,5 +46,6 @@ docker compose exec egress tail -f /var/log/squid/access.log   # watch TCP_DENIE
   (169.254.169.254) so boto3 can fetch instance-role credentials on cloud deploys —
   pinned to that listener + that one link-local IP.
 - Allowlist per tool is the union of that tool's needs. The guardrail's own leg
-  (`:3133`) covers its two providers: the HuggingFace model pull and the region's
-  `bedrock-runtime` endpoint.
+  (`:3133`) covers its two providers: the HuggingFace model pull (allowlist file)
+  and the `bedrock-runtime` endpoint (a dstdom_regex ACL in `squid.compose.conf`
+  matching any region, since the endpoint name is region-specific).

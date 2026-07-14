@@ -6,5 +6,5 @@ runtime:
 # Pulumi Cloud copies this into a stack tag capped at 256 chars — keep it short.
 description: >-
   One EC2 VM running the same docker-compose stack as a local deploy, behind
-  the shared Cloudflare Tunnel, with a Bedrock Guardrail as the default
-  output screen. Full runbook: docs/deploy/aws.md.
+  the shared Cloudflare Tunnel, with a Bedrock Guardrail as the output
+  screen. Full runbook: docs/deploy/aws.md.

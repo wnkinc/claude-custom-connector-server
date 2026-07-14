@@ -8,7 +8,7 @@ between paths later by re-running the other runbook with the same domain.
 | | **Local** ([runbook](deploy/local.md)) | **AWS** ([runbook](deploy/aws.md)) |
 |---|---|---|
 | Host | your own Linux box | EC2 VM (default t3.small), created by `pulumi up` |
-| Guardrail default | `llamafirewall` — local model, needs a HF token | `bedrock` — Amazon Bedrock Guardrails API |
+| Guardrail | `llamafirewall` (default) — local model, needs a HF token | `bedrock` — Amazon Bedrock Guardrails API, always on |
 | Admin access | it's your machine | SSM Session Manager (zero inbound ports) |
 | Cost | your hardware + electricity | ~$15/mo (t3.small) + EBS + Bedrock per-scan |
 
@@ -22,9 +22,10 @@ while keeping its domain, tunnel, and credentials.
    `telegram`. Start small; adding a tool later is an `.env` edit + `up`.
    (`lean` needs `data`, and its 13 GB base image wants a bigger disk.)
 2. **Guardrail on or off** — the output screen for the untrusted tools (`xmcp`,
-   `telegram`). On is the default and each path picks its natural provider
-   (table above). Off skips the HF/Bedrock setup entirely — set it off only if
-   you accept unscreened external content reaching your model context.
+   `telegram`). Each path picks its natural provider (table above). On the AWS
+   path it's always on; locally, on is the default and off skips the HF setup —
+   set it off only if you accept unscreened external content reaching your
+   model context.
 3. **Approvals — needs-approval, always-allow, or blocked.** The server-side
    version of Claude's per-tool "always allow / needs approval / blocked": the
    desktop toggle is sticky (approve once and it sticks across every chat) and
