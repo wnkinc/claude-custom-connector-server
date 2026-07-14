@@ -148,6 +148,27 @@ def test_approval_sidecar_wiring(name):
     )
 
 
+def test_ci_and_dependabot_cover_every_tool():
+    """A tool outside the pytest matrix ships untested; one outside dependabot's
+    pip directories gets no security-update PRs for its lock. Both gaps happened
+    (workspace/gatekeeper were missing from dependabot) -- now they fail CI."""
+    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    matrix = {e["tests"] for e in ci["jobs"]["pytest"]["strategy"]["matrix"]["include"]}
+    bot = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text())
+    pip_dirs = {
+        d
+        for u in bot["updates"]
+        if u["package-ecosystem"] == "pip"
+        for d in u.get("directories", [])
+    }
+    for name in TOOLS:
+        assert f"tools/{name}" in matrix, f"{name}: no pytest matrix entry in ci.yml"
+        assert f"/tools/{name}" in pip_dirs, (
+            f"{name}: missing from dependabot.yml pip directories -- its lock gets no "
+            "security-update PRs"
+        )
+
+
 @pytest.mark.parametrize("name", TOOLS)
 def test_one_port_one_subdomain(name):
     manifest = MANIFESTS[name]
