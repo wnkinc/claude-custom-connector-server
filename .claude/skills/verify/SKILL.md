@@ -30,8 +30,10 @@ curl -s http://127.0.0.1:18072/healthz   # sidecar up; provider slack/unconfigur
 - The real telegram server needs live Telegram credentials + the vendored stdio engine.
   For changes in the shared layers (serve/middleware/gating), stand in a minimal
   `FastMCP(name="telegram")` with one write + one read tool and call
-  `serve(mcp, port=..., require_approval=True)` with `MCP_APPROVAL_EXEMPT=<read tool>` —
-  same composition path, same source name.
+  `serve(mcp, port=..., require_approval=True)` — same composition path, same
+  source name. Tools ship always_allow; to exercise the gate, set a mode first:
+  `curl -XPOST {sidecar}/gating -d '{"source":"telegram","tool":"<write tool>","mode":"needs_approval"}' -H 'content-type: application/json'`
+  (modes cache for ~15s in the server).
 
 ## Drive
 

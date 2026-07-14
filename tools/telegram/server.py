@@ -11,8 +11,9 @@ enforced overrides, below.
 Posture: Telegram message content is untrusted external input (prompt-injection
 vector), so output is guardrail-screened. The exposed surface defaults to the
 engine's read-only tool set; widening to TELEGRAM_EXPOSED_TOOLS=all is a
-deliberate .env change, and every non-read tool then blocks on the out-of-band
-approval gate (approval-exempt.txt carries the vetted read-only names).
+deliberate .env change. Which tools then require approval is the sidecar's
+stored per-tool modes (everything ships always_allow; the operator gates
+individual writes via the gatekeeper or the manage panel).
 """
 
 import os
