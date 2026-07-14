@@ -109,7 +109,8 @@ class ApprovalMiddleware(Middleware):
 
     def __init__(
         self,
-        source: str = "mcp",
+        *,
+        source: str,
         approval_url: str | None = None,
         timeout: float = 10.0,
         widget: bool = False,
