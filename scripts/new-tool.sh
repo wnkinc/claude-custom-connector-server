@@ -165,7 +165,9 @@ cat <<DONE
 Created tools/${NAME}/ (server.py, requirements.txt, env.example, Dockerfile) + egress
 allowlist, and wired a compose service (MCP :${PORT}, egress via squid :${EPORT}).
 
-Finish wiring it (all in-repo):
+Finish wiring it (all in-repo). At any point, the stack-consistency test names
+whatever is still missing (compose/egress/ingress/ports):
+    pytest security/test_stack.py
   1. Lock deps:  uv pip compile tools/${NAME}/requirements.txt --generate-hashes \\
                    --python-version 3.12 -o tools/${NAME}/requirements.lock
   2. Tests + CI: write tools/${NAME}/test_${ACL}.py (thin server tests; copy an
