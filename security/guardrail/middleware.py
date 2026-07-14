@@ -69,8 +69,9 @@ class GuardrailMiddleware(Middleware):
 
     def __init__(
         self,
+        *,
+        source: str,
         guardrail_url: str | None = None,
-        source: str = "xmcp",
         timeout: float = 20.0,
         exempt: set[str] | None = None,
     ) -> None:
