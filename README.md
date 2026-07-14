@@ -22,6 +22,21 @@ Claude Code on the desktop app. Tell it where this repo lives and what you want:
 
 Claude takes it from there.
 
+## The tools
+
+Each tool is its own container and its own connector (`https://<subdomain>.<your-domain>/mcp`),
+opt-in via `COMPOSE_PROFILES`. Built on open source wherever one fits — the wrapper
+adds the shared security stack (OAuth, egress wall, guardrail, approvals), not a new engine:
+
+| Tool | What it is | Built on |
+|---|---|---|
+| `xmcp` | The full X API surface — reads, and OAuth1 user-context writes acting as your account | [xdevplatform/xmcp](https://github.com/xdevplatform/xmcp) |
+| `telegram` | Your Telegram account as tools (read-only by default; writes are opt-in + gated) | [chigwell/telegram-mcp](https://github.com/chigwell/telegram-mcp), vendored + pinned |
+| `workspace` | Google Workspace — Gmail, Drive, Calendar, Docs, Sheets, Slides, Tasks, Chat — as your account | [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp), vendored |
+| `data` | Crypto market data into a local parquet lake, exportable to the backtester | [OpenBB](https://openbb.co) (Tiingo provider) |
+| `lean` | Self-hosted backtests of agent-authored algorithms over the lake's data | [QuantConnect Lean](https://github.com/QuantConnect/Lean), pinned engine image |
+| `gatekeeper` | The control plane: per-tool permissions, in-chat panels, chat-driven deploys | native (always on, like the sidecars) |
+
 ## FAQs
 Each tool is opt-in via a compose profile named after it — only the tools in
 `COMPOSE_PROFILES` are built and started, and that list is the only deploy-time
