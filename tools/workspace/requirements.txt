@@ -18,3 +18,7 @@ defusedxml>=0.7.1
 pypdf>=6.13.3
 pytz>=2026.1.post1
 markdown-it-py>=3.0.0
+# Not an engine dependency, required by OUR substrate: googleapiclient rides
+# httplib2, which needs the socks module to CONNECT through the egress wall --
+# without it every Google API call tries (and fails) to dial direct.
+pysocks>=1.7.1
