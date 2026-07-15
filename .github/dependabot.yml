@@ -12,6 +12,15 @@ updates:
       - /tools/telegram
       - /tools/workspace
       - /tools/gatekeeper
+      - /tools/browser
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0 # version updates off; security updates unaffected
+
+  # The browser tool's engine (@playwright/mcp) is npm-locked, same posture as pip:
+  # no version churn, security updates only.
+  - package-ecosystem: npm
+    directory: /tools/browser
     schedule:
       interval: weekly
     open-pull-requests-limit: 0 # version updates off; security updates unaffected

@@ -84,6 +84,18 @@ services:
       APPROVAL_PUBLIC_URL: https://approval.${MCP_DOMAIN}
       MCP_PUBLIC_URL: https://gatekeeper.${MCP_DOMAIN}
 
+  # Browser returns untrusted external content (web pages) and acts on the live
+  # web as you wherever its persistent profile is signed in. BROWSER_VIEW_URL is
+  # what the browser_live_view tool hands the user (the noVNC page; the VNC
+  # password in tools/browser/.env guards it).
+  browser:
+    environment:
+      MCP_AUTH_ENABLED: "1"
+      MCP_REQUIRE_APPROVAL: ${MCP_REQUIRE_APPROVAL:-1}
+      MCP_UNTRUSTED_OUTPUT: "1"
+      MCP_PUBLIC_URL: https://browser.${MCP_DOMAIN}
+      BROWSER_VIEW_URL: https://browser-view.${MCP_DOMAIN}/vnc.html?autoconnect=true&resize=scale
+
 # INGRESS routing, committed here so nothing public runs that isn't in the repo. Compose
 # interpolates ${MCP_DOMAIN}/${TUNNEL_ID} from the root .env and mounts the rendered
 # file into the sidecar -- the committed routing stays generic. cloudflared dials OUT to
@@ -112,6 +124,14 @@ configs:
           service: http://gatekeeper:8065
         - hostname: workspace.${MCP_DOMAIN}
           service: http://workspace:8066
+        # The browser tool's human-facing live view (noVNC over websocket; the
+        # VNC password is the gate). Listed BEFORE the MCP route on purpose: the
+        # stack validator keys routes by service name and reads the LAST match
+        # as the tool's MCP endpoint.
+        - hostname: browser-view.${MCP_DOMAIN}
+          service: http://browser:6080
+        - hostname: browser.${MCP_DOMAIN}
+          service: http://browser:8067
         # The approval sidecar goes public ONLY on its human-facing paths: the
         # capability-token pages (approve, the manage widget's session -- tokens
         # are the credential) and the provider interactivity webhooks

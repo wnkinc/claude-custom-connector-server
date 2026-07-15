@@ -1,0 +1,23 @@
+{
+  "title": "Browser",
+  "profile": "browser",
+  "subdomain": "browser",
+  "port": 8067,
+  "summary": "A real web browser as tools (Microsoft's @playwright/mcp, full surface) with a human live-view/takeover page (noVNC) watching the same headed Chromium session.",
+  "secrets": [
+    {
+      "key": "BROWSER_VIEW_PASSWORD",
+      "label": "Live-view VNC password",
+      "hint": "Choose any passphrase; it gates the browser-view noVNC page. Leave unset to disable the live view entirely."
+    }
+  ],
+  "prerequisites": [],
+  "notes": [
+    "Egress: this tool's squid listener allows ANY external HTTPS host (browsing is its job); private/link-local ranges stay denied.",
+    "Live view: https://browser-view.<domain>/vnc.html -- full mouse/keyboard takeover of the same session, guarded only by the VNC password above.",
+    "Image bundles Chromium and the X/VNC stack (~1.5GB); first build downloads the pinned browser build.",
+    "Screenshots/PDFs are image bytes the text guardrail cannot screen (accepted posture).",
+    "The Chromium profile persists in the state volume: sites you log into stay logged in for the agent."
+  ],
+  "depends": []
+}

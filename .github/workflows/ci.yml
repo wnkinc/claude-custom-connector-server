@@ -46,6 +46,8 @@ jobs:
             lock: tools/telegram/requirements.lock
           - tests: tools/workspace
             lock: tools/workspace/requirements.lock
+          - tests: tools/browser
+            lock: tools/browser/requirements.lock
           - tests: tools/gatekeeper
             lock: tools/gatekeeper/requirements.lock
           # security/ has no lock of its own; xmcp is the max-posture tool, so its

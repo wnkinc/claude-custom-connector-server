@@ -57,7 +57,7 @@ services:
         # skips the local-model stack (torch/CUDA, multi-GB) entirely.
         GUARDRAIL_PROVIDER: ${GUARDRAIL_PROVIDER:-llamafirewall}
     image: mcp-guardrail
-    profiles: ["xmcp", "telegram", "workspace"]   # auto: starts with any untrusted-output tool
+    profiles: ["xmcp", "telegram", "workspace", "browser"]   # auto: starts with any untrusted-output tool
     restart: unless-stopped
     # No published port -- a true sidecar, reached over the network as http://guardrail:8071.
     environment:
@@ -317,6 +317,46 @@ services:
     networks:
       - internal
 
+  # Untrusted-output tool like xmcp: web pages are a prompt-injection vector, so
+  # results screen through the guardrail. The stdio child (@playwright/mcp) drives
+  # a HEADED Chromium on the container's Xvfb display; the entrypoint's noVNC live
+  # view (port 6080, routed by the tunnel overlay) watches that same display.
+  browser:
+    build:
+      context: .
+      dockerfile: tools/browser/Dockerfile
+    image: mcp-browser
+    profiles: ["browser"]   # opt-in: runs only when listed in COMPOSE_PROFILES (root .env)
+    restart: unless-stopped
+    # Chromium maps renderer shared memory into /dev/shm; docker's 64MB default
+    # crashes tabs on real pages.
+    shm_size: 2gb
+    env_file:
+      - path: tools/browser/.env
+        required: false
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_TRANSPORT: http
+      MCP_AUTH_ENABLED: "0"
+      MCP_REQUIRE_APPROVAL: "0"
+      MCP_UNTRUSTED_OUTPUT: "1"
+      GUARDRAIL_URL: http://guardrail:8071
+      GUARDRAIL_ENABLED: ${GUARDRAIL_ENABLED:-1}
+      # The approval sidecar: modes + the startup catalog registration that puts
+      # this tool in the manage panel (see serve()'s /healthz).
+      APPROVAL_URL: http://approval:8072
+      # server.py passes this to Chromium as --proxy-server (browsers ignore the
+      # proxy env vars); the browser listener is the wall's one
+      # allow-all-external rule -- see squid.compose.conf.
+      HTTPS_PROXY: http://egress:3136
+      HTTP_PROXY: http://egress:3136
+      # sidecars must bypass the egress wall (sideways traffic, not internet).
+      NO_PROXY: guardrail,approval,localhost,127.0.0.1
+    volumes:
+      - browser-state:/app/state
+    networks:
+      - internal
+
 networks:
   # No gateway to the host/internet: containers here reach only each other + any peer
   # that also has an `edge` leg (the egress proxy). This is the wall.
@@ -325,6 +365,7 @@ networks:
   edge: {}
 
 volumes:
+  browser-state:
   workspace-state:
   approval-state:
   gatekeeper-state:

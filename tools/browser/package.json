@@ -1,0 +1,8 @@
+{
+  "name": "browser-engine",
+  "private": true,
+  "description": "Pinned @playwright/mcp engine for the browser tool. The Dockerfile npm-ci's this into /app/engine; server.py runs its cli.js as a stdio child. Exact-pinned + lockfile for the same tamper-evidence as the python requirements.lock.",
+  "dependencies": {
+    "@playwright/mcp": "0.0.78"
+  }
+}
