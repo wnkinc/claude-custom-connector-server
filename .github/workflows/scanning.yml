@@ -39,6 +39,10 @@ jobs:
         run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
       - name: scan pinned base images
         # Digests are read from the repo so a re-pin is picked up automatically.
+        # --ignore-unfixed: debian-slim bases permanently carry ~20 HIGH/CRITICAL
+        # CVEs with no released fix, so an all-vulns gate can never pass -- this
+        # scan alerts only where a re-pin or patch would actually help.
+        # Known-and-accepted fixable findings live in .trivyignore.
         # Excluded from the raw-digest scan: ubuntu/squid (its base is
         # expected-red -- the egress Dockerfile exists to patch it; the built image
         # is scanned in the next step instead).
@@ -48,7 +52,7 @@ jobs:
             | sort -u | grep -v 'ubuntu/squid')
           echo "scanning:"; echo "$refs"
           for ref in $refs; do
-            trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 "$ref"
+            trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$ref"
           done
       - name: scan patched egress image
         # The one image whose Dockerfile applies security updates on top of its
