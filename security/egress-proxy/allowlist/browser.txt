@@ -1,0 +1,6 @@
+# browser egress allowlist -- EMPTY ON PURPOSE.
+# The browser is the wall's one open-external tool (its job is the open web), so its
+# real policy is the `!net_private` rule in squid.compose.conf: CONNECT to any
+# EXTERNAL host on 443, private/link-local/loopback ranges denied. This file exists
+# to keep the standard per-tool listener->allowlist chain (and its CI check) intact;
+# hosts listed here would be redundant with the open rule.
