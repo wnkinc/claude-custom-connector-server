@@ -1,7 +1,9 @@
-# CVE-2026-39822 (Go stdlib os.Root symlink traversal, fixed in go1.26.5):
-# flagged in cloudflare/cloudflared, whose latest release (2026.7.1) is still
-# built with go1.26.4 -- no patched upstream build exists yet. Not reachable in
-# our deployment: cloudflared runs as a tunnel client with a single read-only
-# creds mount. Expiry forces a re-check; drop this entry once a cloudflared
-# release built with go >= 1.26.5 is pinned.
-CVE-2026-39822 exp:2026-08-15
+# Fixable vulns the pinned-base-image scan (scanning.yml) accepts, each with a
+# reason. Revisit on re-pin.
+
+# Both live in npm's own bundled node_modules inside node:22-bookworm-slim --
+# build-stage tooling only. The browser tool's runtime image copies just the
+# node binary, /app/engine, and the browser bundle (see tools/browser/Dockerfile);
+# npm and its bundled deps never ship.
+CVE-2026-33671
+CVE-2026-48815
