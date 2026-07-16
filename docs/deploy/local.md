@@ -22,7 +22,7 @@ cd mcp-tools
 cp env.example .env
 ```
 
-In `.env`, set `COMPOSE_PROFILES` to your tools, e.g. `xmcp,data`. That's the
+In `.env`, set `COMPOSE_PROFILES` to your tools, e.g. `browser,telegram`. That's the
 only deploy-time choice: only listed tools build and run, and the substrate
 (egress wall, approval sidecar, gatekeeper, and — whenever an untrusted-output
 tool is listed — the guardrail) comes up on its own.
@@ -79,7 +79,7 @@ The wildcard record covers every current and future tool subdomain with zero
 per-tool DNS steps, and adds no exposure: DNS does no security work in this
 stack — the committed tunnel overlay is the allowlist of what's actually
 served, and cloudflared answers 404 for any hostname without a route.
-(Cloudflare wildcards cover one label: `xmcp.example.com`, never
+(Cloudflare wildcards cover one label: `telegram.example.com`, never
 `a.b.example.com`.)
 
 ## 4. Google OAuth client (~5–10 min)
@@ -94,7 +94,7 @@ In the [Google Cloud Console](https://console.cloud.google.com/):
 3. **Credentials → Create OAuth client ID:** type **Web application**; one
    redirect URI per tool you enabled:
    `https://<tool>.example.com/auth/callback` (e.g.
-   `https://xmcp.example.com/auth/callback`). Copy the **Client ID** and
+   `https://telegram.example.com/auth/callback`). Copy the **Client ID** and
    **Client secret**.
 
 One OAuth client covers all tools; each new tool just adds another redirect
@@ -160,16 +160,16 @@ Cloudflare ingress, with auth **on** (the overlay). Watch it:
 
 ```bash
 docker compose ps
-docker compose logs -f xmcp        # expect: "OAuth enabled (Google) at https://xmcp..."
+docker compose logs -f telegram    # expect: "OAuth enabled (Google) at https://telegram..."
 ```
 
 ## 8. Verify a public endpoint
 
 ```bash
-curl -s https://xmcp.example.com/.well-known/oauth-authorization-server | head -c 300; echo
-curl -s https://xmcp.example.com/.well-known/oauth-protected-resource/mcp; echo
+curl -s https://telegram.example.com/.well-known/oauth-authorization-server | head -c 300; echo
+curl -s https://telegram.example.com/.well-known/oauth-protected-resource/mcp; echo
 # 401 MUST carry WWW-Authenticate with resource_metadata=... :
-curl -sD - -o /dev/null https://xmcp.example.com/mcp | grep -i www-authenticate
+curl -sD - -o /dev/null https://telegram.example.com/mcp | grep -i www-authenticate
 ```
 
 The last line must print `WWW-Authenticate: Bearer ... resource_metadata=...`.

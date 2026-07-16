@@ -6,9 +6,6 @@ version: 2
 updates:
   - package-ecosystem: pip
     directories:
-      - /tools/xmcp
-      - /tools/data
-      - /tools/lean
       - /tools/telegram
       - /tools/workspace
       - /tools/gatekeeper

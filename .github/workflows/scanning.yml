@@ -39,14 +39,13 @@ jobs:
         run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
       - name: scan pinned base images
         # Digests are read from the repo so a re-pin is picked up automatically.
-        # Excluded from the raw-digest scan: quantconnect/lean (13GB exceeds the
-        # runner; scan locally when re-pinning) and ubuntu/squid (its base is
+        # Excluded from the raw-digest scan: ubuntu/squid (its base is
         # expected-red -- the egress Dockerfile exists to patch it; the built image
         # is scanned in the next step instead).
         run: |
           refs=$(grep -rhoE '[a-z0-9./_-]+(:[a-zA-Z0-9._-]+)?@sha256:[a-f0-9]{64}' \
               tools/*/Dockerfile security/*/service/Dockerfile docker-compose*.yml \
-            | sort -u | grep -vE 'quantconnect|ubuntu/squid')
+            | sort -u | grep -v 'ubuntu/squid')
           echo "scanning:"; echo "$refs"
           for ref in $refs; do
             trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 "$ref"

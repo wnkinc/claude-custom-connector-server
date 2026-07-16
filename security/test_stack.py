@@ -57,7 +57,7 @@ def merged_env(name: str) -> dict:
 
 def test_manifests_found():
     # A glob/layout change must not green-wash every rule below into vacuity.
-    assert len(TOOLS) >= 5, f"expected the shipped tools' manifests, found only {TOOLS}"
+    assert len(TOOLS) >= 3, f"expected the shipped tools' manifests, found only {TOOLS}"
 
 
 # Identities the substrate already claims: subdomains routed by the overlay and
