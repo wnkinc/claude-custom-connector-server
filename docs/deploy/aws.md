@@ -51,7 +51,7 @@ pulumi stack init prod
 pulumi config set aws:region us-east-1
 pulumi config set domain example.com
 pulumi config set cloudflareStack organization/mcp-tools-cloudflare/prod
-pulumi config set tools xmcp,telegram        # your pick from the README's tools table
+pulumi config set tools browser,telegram     # your pick from the README's tools table
 ```
 
 (`cloudflareStack` is the step-1 stack's full name on your shared Pulumi
@@ -64,10 +64,10 @@ configure. (The local-model provider, llamafirewall, is a local-path option;
 see the [local runbook](local.md).)
 
 Sizing: defaults are `t3.small` + 20 GB gp3 — right for the light tools
-(`xmcp`, `telegram`); the always-on substrate is small, and on this path the
-guardrail is a Bedrock API call rather than a local model. Enabling `data`
-wants extra disk for its parquet lake; enabling `lean` wants `volumeGb` ≥ 100
-(13 GB base image), ≥ 8 GB RAM (`t3.large` up), and benefits from more CPU.
+(`telegram`, `workspace`); the always-on substrate is small, and on this path
+the guardrail is a Bedrock API call rather than a local model. `browser` runs a
+headed Chromium — give it ≥ 4 GB RAM (`t3.medium` up). A tool with a large
+image or on-disk artifacts wants `volumeGb` sized to match.
 Running your own fork / a pinned version: `pulumi config set repoUrl <fork>`,
 `pulumi config set repoRef <tag-or-commit>`.
 
@@ -152,7 +152,7 @@ Approve/Deny card to your channel:
 From anywhere:
 
 ```bash
-curl -sD - -o /dev/null https://xmcp.example.com/mcp | grep -i www-authenticate
+curl -sD - -o /dev/null https://telegram.example.com/mcp | grep -i www-authenticate
 # must print: WWW-Authenticate: Bearer ... resource_metadata=...
 ```
 

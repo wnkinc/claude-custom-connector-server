@@ -38,6 +38,10 @@ services:
     volumes:
       - ./security/egress-proxy/squid.compose.conf:/etc/squid/squid.conf:ro
       - ./security/egress-proxy/allowlist:/etc/squid/allowlist:ro
+      # Extension hook: squid.compose.conf includes this (empty in this repo). An
+      # overlay repo may mount its own conf over the same target to add listeners
+      # -- see security/egress-proxy/local.conf.
+      - ./security/egress-proxy/local.conf:/etc/squid/conf.d/local.conf:ro
     networks:
       - internal   # reachable by tools as http://egress:<port>
       - edge       # the only leg with internet -> performs the allowlisted CONNECTs
@@ -57,7 +61,7 @@ services:
         # skips the local-model stack (torch/CUDA, multi-GB) entirely.
         GUARDRAIL_PROVIDER: ${GUARDRAIL_PROVIDER:-llamafirewall}
     image: mcp-guardrail
-    profiles: ["xmcp", "telegram", "workspace", "browser"]   # auto: starts with any untrusted-output tool
+    profiles: ["telegram", "workspace", "browser"]   # auto: starts with any untrusted-output tool
     restart: unless-stopped
     # No published port -- a true sidecar, reached over the network as http://guardrail:8071.
     environment:
@@ -125,110 +129,7 @@ services:
       start_period: 15s
       retries: 3
 
-  # This tool screens its output through the guardrail (untrusted external content).
-  xmcp:
-    build:
-      context: .   # repo root, so the image can COPY the shared ./security package
-      dockerfile: tools/xmcp/Dockerfile
-    image: mcp-xmcp
-    profiles: ["xmcp"]
-    restart: unless-stopped
-    env_file:
-      # The tool's secrets. required: false so a tool you haven't enabled (or filled
-      # in) never blocks `up`; an ACTIVE tool missing its secrets fails loudly itself.
-      - path: tools/xmcp/.env
-        required: false
-    # No published host port: the tool is on the internal network (the egress wall), which
-    # can't publish one. Ingress is the tunnel's job; to reach it locally use
-    # `docker compose exec` or a container on mcp-tools_internal.
-    environment:
-      MCP_HOST: 0.0.0.0
-      MCP_TRANSPORT: http
-      # Security posture for local dev (the tunnel overlay flips these on). These override
-      # the .env's production values (env beats env_file).
-      MCP_AUTH_ENABLED: "0"
-      MCP_REQUIRE_APPROVAL: "0"
-      MCP_UNTRUSTED_OUTPUT: "1"
-      GUARDRAIL_URL: http://guardrail:8071
-      # Screening on/off travels with the guardrail profile (root .env sets both);
-      # with screening on and the service absent/unhealthy, results are WITHHELD.
-      GUARDRAIL_ENABLED: ${GUARDRAIL_ENABLED:-1}
-      APPROVAL_URL: http://approval:8072
-      # All outbound HTTPS is forced through the egress proxy; NO_PROXY keeps sideways +
-      # loopback traffic direct (the sidecars, localhost, the Docker resolver).
-      HTTPS_PROXY: http://egress:3128
-      HTTP_PROXY: http://egress:3128
-      NO_PROXY: guardrail,approval,localhost,127.0.0.1
-    volumes:
-      - xmcp-state:/app/state   # writable state (OAuth registrations + tokens when auth is on)
-    networks:
-      - internal
-
-  # Trusted tools: same shape, no guardrail leg. Each points at its OWN egress listener,
-  # so it can only reach its own allowlist. Posture is local dev here; the overlay flips it.
-  data:
-    build:
-      context: .
-      dockerfile: tools/data/Dockerfile
-    image: mcp-data
-    profiles: ["data"]
-    restart: unless-stopped
-    env_file:
-      - path: tools/data/.env
-        required: false
-    environment:
-      MCP_HOST: 0.0.0.0
-      MCP_TRANSPORT: http
-      # The approval sidecar: modes + the startup catalog registration that puts
-      # this tool in the manage panel (see serve()'s /healthz).
-      APPROVAL_URL: http://approval:8072
-      MCP_AUTH_ENABLED: "0"
-      HTTPS_PROXY: http://egress:3129
-      HTTP_PROXY: http://egress:3129
-      # approval must bypass the egress wall (sideways traffic, not internet):
-      # the /healthz startup registration and mode fetches go straight to it.
-      NO_PROXY: approval,localhost,127.0.0.1
-      # Where lean-export writes Lean-format files (the volume shared with lean).
-      LEAN_DATA_ROOT: /lean-data
-    volumes:
-      - data-state:/app/state
-      - lean-data:/lean-data
-    networks:
-      - internal
-
-  lean:
-    build:
-      context: .
-      dockerfile: tools/lean/Dockerfile
-    image: mcp-lean
-    profiles: ["lean"]
-    restart: unless-stopped
-    env_file:
-      - path: tools/lean/.env
-        required: false
-    environment:
-      MCP_HOST: 0.0.0.0
-      MCP_TRANSPORT: http
-      # The approval sidecar: modes + the startup catalog registration that puts
-      # this tool in the manage panel (see serve()'s /healthz).
-      APPROVAL_URL: http://approval:8072
-      MCP_AUTH_ENABLED: "0"
-      HTTPS_PROXY: http://egress:3130
-      HTTP_PROXY: http://egress:3130
-      # approval must bypass the egress wall (sideways traffic, not internet):
-      # the /healthz startup registration and mode fetches go straight to it.
-      NO_PROXY: approval,localhost,127.0.0.1
-      # The engine backtests ONLY pipeline data (the volume the data tool exports
-      # into) -- never the image's bundled samples. server.py seeds the two engine
-      # metadata files (market hours, symbol properties) there at startup.
-      LEAN_DATA_FOLDER: /lean-data
-    volumes:
-      - lean-state:/app/state
-      - lean-data:/lean-data
-    networks:
-      - internal
-
-  # Untrusted-output tool like xmcp: Telegram message content is a prompt-injection
+  # Untrusted-output tool: Telegram message content is a prompt-injection
   # vector, so results screen through the guardrail. Its stdio child (the vendored
   # engine) inherits this environment -- including the TELEGRAM_PROXY_* vars that
   # point MTProto at the egress wall (Telethon speaks raw TCP to DC IPs; the
@@ -317,7 +218,7 @@ services:
     networks:
       - internal
 
-  # Untrusted-output tool like xmcp: web pages are a prompt-injection vector, so
+  # Untrusted-output tool: web pages are a prompt-injection vector, so
   # results screen through the guardrail. The stdio child (@playwright/mcp) drives
   # a HEADED Chromium on the container's Xvfb display; the entrypoint's noVNC live
   # view (port 6080, routed by the tunnel overlay) watches that same display.
@@ -370,11 +271,4 @@ volumes:
   approval-state:
   gatekeeper-state:
   telegram-state:
-  lean-state:
   guardrail-hf-cache:
-  xmcp-state:
-  data-state:
-  # Artifact plane between data (writer: lean-export) and lean (reader: the engine).
-  # Cross-image access works via the shared 'leandata' group (gid 1500) both
-  # Dockerfiles create -- the two images' 'app' users have different uids.
-  lean-data:

@@ -21,3 +21,7 @@ vendor/
 
 # Claude Code local (per-machine) settings; the deploy skill in .claude/skills IS committed.
 .claude/settings.local.json
+
+# The beta-tools overlay repo (github.com/wnkinc/beta-tools), cloned here so its
+# image builds can reach ./security; its own git history, never part of this one.
+/beta/

@@ -6,10 +6,10 @@
 Claude desktop / claude.ai web / mobile     (custom connector, private to your account)
         │  HTTPS
         ▼
-xmcp.example.com (your MCP_DOMAIN)           Cloudflare edge — TLS, hides home IP, WAF
+telegram.example.com (your MCP_DOMAIN)           Cloudflare edge — TLS, hides home IP, WAF
         │  Cloudflare Tunnel (cloudflared sidecar, outbound-only transport)
         ▼
-xmcp container :8061                          FastMCP server on an internal Docker network
+telegram container :8063                          FastMCP server on an internal Docker network
         │  FastMCP owns OAuth: "Sign in with Google", locked to an email allowlist
         │  sealed from the internet; output screened by the guardrail sidecar (:8071)
         ▼
@@ -63,12 +63,13 @@ The same image runs locally (`docker compose up`) and in the cloud — transport
   credentials — both paths run these same compose files behind it.
 
 - **Tools never call each other; cooperation is an artifact plane.** When two tools need
-  to cooperate (data produces the lake, lean backtests it), they share a named volume
-  carrying artifacts in a documented format — exactly one writer, and the format is the
-  contract (here Lean's own on-disk data format, not something we invented). The
-  dependency stays soft: lean without data simply reports no data, data without lean
-  just exports to a volume nobody reads. No tool ever holds another tool's credentials
-  or network access.
+  to cooperate (one produces artifacts, another consumes them — the data/lean pair in
+  the beta-tools overlay is the worked example), they share a named volume carrying
+  artifacts in a documented format — exactly one writer, and the format is the contract
+  (an engine's own on-disk format, not something we invented). The dependency stays
+  soft: a consumer without its producer simply reports no data, a producer without its
+  consumer just exports to a volume nobody reads. No tool ever holds another tool's
+  credentials or network access.
 
 - **All internet access flows through the egress allowlist (the strongest single
   control).** Each tool sits on an `internal` Docker network whose only route off-box is

@@ -46,7 +46,7 @@ gatekeeper tool ──► approval sidecar (sole authority on modes) ◄── e
 ## The surfaces
 
 - **`manage_tools`** opens the **permissions panel** in chat: one collapsible section
-  per connector (telegram, xmcp, …), tools grouped read-only / write-delete, each with
+  per connector (telegram, workspace, …), tools grouped read-only / write-delete, each with
   an always-allow / needs-approval / blocked control. Review, then **Save** —
   one save can span connectors. The human's click is the authorization, so a save takes
   no approval card. Sessions are **one-shot**: after a save the panel locks (its
