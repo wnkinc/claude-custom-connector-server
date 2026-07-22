@@ -37,6 +37,7 @@ import secrets
 import time
 import urllib.parse
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import NamedTuple
 
 import httpx
@@ -51,6 +52,33 @@ log = logging.getLogger("approval")
 
 _PENDING: dict[str, dict] = {}
 _TTL_SECONDS = 600  # approval links expire after 10 minutes
+
+
+def _audit(event: str, **fields) -> None:  # type: ignore[no-untyped-def]
+    """Decision diary: one JSON line per security-relevant event, appended to
+    APPROVAL_AUDIT_FILE. The cards scroll away; this file is the durable answer to
+    "what did the agent try while I was away, and what did I decide?" -- with
+    denials and expiries as first-class outcomes, since a pile of denied attempts
+    is the record that matters most. Best-effort by design: the gate must never
+    fail because the diary can't be written. Unset path = no diary (same dev
+    posture as APPROVAL_STATE_FILE).
+    """
+    path = os.getenv("APPROVAL_AUDIT_FILE", "")
+    if not path:
+        return
+    record = {"ts": datetime.now(UTC).isoformat(timespec="seconds"), "event": event, **fields}
+    try:
+        with open(path, "a") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError:
+        log.exception("audit append failed (%s)", path)
+
+
+def _decide(rec: dict, status: str, via: str) -> None:
+    """The one writer of a human decision onto a pending record (page + the three
+    provider webhooks all land here), so every decision is diaried exactly once."""
+    rec["status"] = status
+    _audit(status, source=rec["source"], action=rec["action"], via=via)
 
 
 # The out-of-band platform that delivers approval cards.
@@ -107,7 +135,11 @@ async def _notify(token: str, action: str, source: str) -> bool:
 def _prune() -> None:
     now = time.time()
     for token in [t for t, r in _PENDING.items() if now - r["created"] > _TTL_SECONDS]:
-        _PENDING.pop(token, None)
+        rec = _PENDING.pop(token, None)
+        if rec is not None:
+            # status distinguishes "the human never answered" (pending) from
+            # "approved but the tool never came back to redeem it".
+            _audit("expired", source=rec["source"], action=rec["action"], status=rec["status"])
 
 
 def _approve_link(token: str) -> str:
@@ -129,9 +161,13 @@ async def gate(request):  # type: ignore[no-untyped-def]
         rec = _PENDING[token]
         if rec["status"] == "approved":
             _PENDING.pop(token, None)  # one-time use
+            # redeemed = the tool came back and the action actually ran (the
+            # approved/denied events above record only the human's click).
+            _audit("redeemed", outcome="allow", source=source, action=rec["action"])
             return JSONResponse({"decision": "allow"})
         if rec["status"] == "denied":
             _PENDING.pop(token, None)
+            _audit("redeemed", outcome="denied", source=source, action=rec["action"])
             return JSONResponse({"decision": "denied"})
         return JSONResponse(
             {
@@ -156,6 +192,7 @@ async def gate(request):  # type: ignore[no-untyped-def]
     # links in tool output trip injection screening), so delivery is load-bearing:
     # report it and let the middleware fail loud instead of waiting on a card nobody got.
     rec["notified"] = await _notify(token, action, source)
+    _audit("requested", source=source, action=action, notified=rec["notified"])
     return JSONResponse(
         {
             "decision": "pending",
@@ -224,7 +261,9 @@ async def approve_route(request):  # type: ignore[no-untyped-def]
         body = urllib.parse.parse_qs((await request.body()).decode())
         decision = (body.get("decision") or [None])[0]
         if decision == "approve":
-            rec["status"] = "approved"
+            # via=page covers both the human page and the in-chat widget's approve
+            # tool -- the widget POSTs this same endpoint (see the parse note above).
+            _decide(rec, "approved", via="page")
             return HTMLResponse(
                 _approval_shell(
                     "Approved",
@@ -234,7 +273,7 @@ async def approve_route(request):  # type: ignore[no-untyped-def]
                 )
             )
         if decision == "deny":
-            rec["status"] = "denied"
+            _decide(rec, "denied", via="page")
             return HTMLResponse(
                 _approval_shell(
                     "Denied",
@@ -365,10 +404,10 @@ async def slack_interact(request):  # type: ignore[no-untyped-def]
     if rec is None:
         msg = "⚠️ This approval link has expired."
     elif action_id == "approve":
-        rec["status"] = "approved"
+        _decide(rec, "approved", via="slack")
         msg = f"✅ *Approved*\n>{rec['action']}\n\nReturn to Claude and tell it to continue."
     elif action_id == "deny":
-        rec["status"] = "denied"
+        _decide(rec, "denied", via="slack")
         msg = f"❌ *Denied*\n>{rec['action']}"
     else:
         msg = "Unknown action."
@@ -471,10 +510,10 @@ async def discord_interact(request):  # type: ignore[no-untyped-def]
     if rec is None:
         msg = "⚠️ This approval has expired."
     elif action_id == "approve":
-        rec["status"] = "approved"
+        _decide(rec, "approved", via="discord")
         msg = f"✅ **Approved**\n> {rec['action']}\n\nReturn to Claude and tell it to continue."
     elif action_id == "deny":
-        rec["status"] = "denied"
+        _decide(rec, "denied", via="discord")
         msg = f"❌ **Denied**\n> {rec['action']}"
     else:
         msg = "Unknown action."
@@ -573,10 +612,10 @@ async def telegram_interact(request):  # type: ignore[no-untyped-def]
     if rec is None:
         msg = "⚠️ This approval has expired."
     elif action_id == "approve":
-        rec["status"] = "approved"
+        _decide(rec, "approved", via="telegram")
         msg = f"✅ Approved\n> {rec['action']}\n\nReturn to Claude and tell it to continue."
     elif action_id == "deny":
-        rec["status"] = "denied"
+        _decide(rec, "denied", via="telegram")
         msg = f"❌ Denied\n> {rec['action']}"
     else:
         msg = "Unknown action."
@@ -763,6 +802,7 @@ async def gating(request):  # type: ignore[no-untyped-def]
         )
     _source_state(source)["modes"][tool] = mode
     _save_state()
+    _audit("mode_set", source=source, tool=tool, mode=mode, via="set_gating")
     log.info("mode set: %s/%s = %s", source, tool, mode)
     return JSONResponse({"ok": True, "source": source, "modes": _effective_modes(source)})
 
@@ -844,6 +884,7 @@ async def manage_session(request):  # type: ignore[no-untyped-def]
                 else:
                     modes[tool] = mode
                     applied += 1
+                    _audit("mode_set", source=src, tool=tool, mode=mode, via="panel")
         forgotten = []
         for src in forget:
             if src in _UNMANAGED_SOURCES:
@@ -851,6 +892,7 @@ async def manage_session(request):  # type: ignore[no-untyped-def]
             elif _STATE.pop(src, None) is not None:
                 forgotten.append(src)
                 applied += 1
+                _audit("forgot", source=src, via="panel")
         _save_state()
         _MANAGE.pop(request.path_params["token"], None)  # one-shot: the view is stale now
         log.info("manage save: %d applied, forgot=%s, refused=%s", applied, forgotten, refused)
@@ -892,6 +934,7 @@ async def healthz(request):  # type: ignore[no-untyped-def]
             "provider": provider,
             "channel": "configured" if _channel_configured() else "unconfigured",
             "public_url_set": bool(os.getenv("APPROVAL_PUBLIC_URL")),
+            "audit": bool(os.getenv("APPROVAL_AUDIT_FILE")),
             "pending": len(_PENDING),
         }
     )
