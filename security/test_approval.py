@@ -40,6 +40,7 @@ def clean(monkeypatch):
     svc._MANAGE.clear()
     gating_mod._cache.clear()  # the TTL cache must not leak modes across tests
     monkeypatch.delenv("APPROVAL_STATE_FILE", raising=False)  # memory-only in tests
+    monkeypatch.delenv("APPROVAL_AUDIT_FILE", raising=False)  # no diary unless a test opts in
     monkeypatch.setenv("APPROVAL_PUBLIC_URL", PUBLIC)
     # Slack off by default: gate still creates approvals but reports notified=False
     # (Slack is the only human channel now -- the chat never gets a link).
@@ -206,6 +207,65 @@ def test_pending_expires_after_ttl():
 
 def test_unknown_token_is_404():
     assert TestClient(svc.app).get("/approve/nope").status_code == 404
+
+
+# --- the decision diary --------------------------------------------------------------
+
+
+def test_audit_diary_records_the_lifecycle(tmp_path, monkeypatch):
+    diary = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("APPROVAL_AUDIT_FILE", str(diary))
+    c = TestClient(svc.app)
+    _gate(c)  # requested
+    c.post(f"/approve/{_token()}", data={"decision": "approve"})  # approved (human)
+    _gate(c)  # redeemed -> the action actually ran
+    _gate(c, key="k2")
+    c.post(f"/approve/{_token(key='k2')}", data={"decision": "deny"})
+    _gate(c, key="k2")  # redeemed -> denial delivered to the tool
+    _gate(c, key="k3")
+    svc._PENDING[_token(key="k3")]["created"] -= svc._TTL_SECONDS + 1
+    svc._prune()  # expired undecided
+    c.post("/gating", json={"source": "teltool", "tool": "send_message", "mode": "blocked"})
+
+    events = [json.loads(line) for line in diary.read_text().splitlines()]
+    assert [e["event"] for e in events] == [
+        "requested",
+        "approved",
+        "redeemed",
+        "requested",
+        "denied",
+        "redeemed",
+        "requested",
+        "expired",
+        "mode_set",
+    ]
+    assert all("ts" in e for e in events)
+    approved, denied = events[1], events[4]
+    assert approved["via"] == "page" and approved["source"] == "teltool"
+    assert "send_message" in approved["action"]
+    assert denied["via"] == "page"
+    assert events[2]["outcome"] == "allow" and events[5]["outcome"] == "denied"
+    assert events[7]["status"] == "pending"  # expired with the human never answering
+    mode_set = {k: v for k, v in events[8].items() if k != "ts"}
+    assert mode_set == {
+        "event": "mode_set",
+        "source": "teltool",
+        "tool": "send_message",
+        "mode": "blocked",
+        "via": "set_gating",
+    }
+
+
+def test_audit_diary_off_by_default_and_best_effort(tmp_path, monkeypatch):
+    # Unset path: the fixture leaves APPROVAL_AUDIT_FILE unset -- decisions flow
+    # with nothing written anywhere (the other lifecycle tests prove flow; this
+    # one proves the failure posture).
+    c = TestClient(svc.app)
+    _gate(c)
+    # Unwritable path: the diary must never break the gate itself.
+    monkeypatch.setenv("APPROVAL_AUDIT_FILE", str(tmp_path / "no-such-dir" / "audit.jsonl"))
+    c.post(f"/approve/{_token()}", data={"decision": "approve"})
+    assert _gate(c)["decision"] == "allow"
 
 
 # --- the Slack webhook: signature is the gate ----------------------------------------
