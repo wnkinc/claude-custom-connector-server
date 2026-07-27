@@ -93,8 +93,12 @@ class WidgetMetaMiddleware(Middleware):
         return out
 
 
-def register_approve_widget(mcp) -> None:  # type: ignore[no-untyped-def]
-    uri = widget_uri(mcp.name, "approve.html")
+def register_approve_widget(mcp, source: str | None = None) -> None:  # type: ignore[no-untyped-def]
+    # source is the tool's short name (serve()'s resolved source), NOT mcp.name: the
+    # display name can be prose ("X API MCP") -- invalid in the ui:// URI -- and the
+    # sidecar's modes are keyed by source, so the tag decision must query the same key.
+    source = source or mcp.name
+    uri = widget_uri(source, "approve.html")
     _csp = {"connectDomains": [b for b in [_public_base()] if b]}
     mcp.resource(
         uri,
@@ -106,4 +110,4 @@ def register_approve_widget(mcp) -> None:  # type: ignore[no-untyped-def]
     # THE one shared piece: tag the GATED tools so their pending result renders the
     # approval card -- same gated decision (baseline + live overrides) the gate uses.
     approval_url = os.getenv("APPROVAL_URL", "http://127.0.0.1:8072")
-    mcp.add_middleware(WidgetMetaMiddleware(uri=uri, source=mcp.name, approval_url=approval_url))
+    mcp.add_middleware(WidgetMetaMiddleware(uri=uri, source=source, approval_url=approval_url))
