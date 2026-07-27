@@ -135,7 +135,7 @@ def serve(
     if approval_widget:
         from security.approval.approve_widget import register_approve_widget
 
-        register_approve_widget(mcp)
+        register_approve_widget(mcp, source)
 
     if require_approval:
         # State + the human-facing pages live in the approval sidecar (APPROVAL_URL) --
