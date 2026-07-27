@@ -1,6 +1,7 @@
 """The in-chat approval card (approve.html), plus the shared widget plumbing.
 
-Opt-in per tool via APPROVAL_WIDGET=1 (see serve()): one middleware tags every
+Default-on for every gated tool once the deploy sets APPROVAL_PUBLIC_URL (see
+serve(); APPROVAL_WIDGET overrides either way): one middleware tags every
 needs_approval tool in tools/list with the widget's _meta, so the host renders the
 in-chat Approve/Deny card when a gated call returns its pending status -- no
 per-tool code, and the card always agrees with the gate because both read the same

@@ -120,11 +120,18 @@ def serve(
     untrusted_output = _env_override("MCP_UNTRUSTED_OUTPUT", untrusted_output)
     stateless_http = _env_override("MCP_STATELESS_HTTP", stateless_http)
 
-    # The in-chat approval card (opt-in per tool, APPROVAL_WIDGET=1): tags gated
-    # tools so their pending status renders an Approve/Deny widget in the chat.
-    # SPIKE_APPROVAL_WIDGET is the flag's pre-promotion name, honored for deploys
-    # whose .env still carries it.
-    approval_widget = _is_truthy(os.getenv("APPROVAL_WIDGET") or os.getenv("SPIKE_APPROVAL_WIDGET"))
+    # The in-chat approval card: tags gated tools so their pending status renders an
+    # Approve/Deny widget in the chat. ON by default wherever it can work -- approval
+    # on and APPROVAL_PUBLIC_URL set (the card's HTML bakes in that base URL) -- so
+    # every tool, present and future, shows the card with zero per-tool wiring.
+    # APPROVAL_WIDGET overrides in either direction (SPIKE_APPROVAL_WIDGET is its
+    # pre-promotion name, honored for deploys whose .env still carries it). The card
+    # needs the HTTP session id at load, so a tool that defaults stateless must run
+    # with MCP_STATELESS_HTTP=0 for the card to render (see the tunnel overlay).
+    default_widget = require_approval and bool(os.getenv("APPROVAL_PUBLIC_URL"))
+    approval_widget = _env_override(
+        "APPROVAL_WIDGET", _env_override("SPIKE_APPROVAL_WIDGET", default_widget)
+    )
     if approval_widget:
         from security.approval.approve_widget import register_approve_widget
 

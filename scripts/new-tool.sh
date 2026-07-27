@@ -184,11 +184,13 @@ whatever is still missing (compose/egress/ingress/ports):
      (the configs: block, above the 404):
          - hostname: ${NAME}.\${MCP_DOMAIN}
            service: http://${NAME}:${PORT}
-     and a service entry flipping its public posture:
+     and a service entry flipping its public posture (APPROVAL_PUBLIC_URL also
+     turns on the in-chat approval card for gated tools -- test_stack requires it):
          ${NAME}:
            environment:
              MCP_AUTH_ENABLED: "1"
              MCP_PUBLIC_URL: https://${NAME}.\${MCP_DOMAIN}
+             APPROVAL_PUBLIC_URL: https://approval.\${MCP_DOMAIN}
      DNS: already covered by the wildcard record the deploy/cloudflare stack owns.
      Route changes apply on cloudflared RECREATE (config renders at up), and a
      changed squid.compose.conf needs an egress RESTART (single-file bind mounts
