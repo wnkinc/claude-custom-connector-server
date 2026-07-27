@@ -146,6 +146,13 @@ def test_approval_sidecar_wiring(name):
     assert "approval" in env.get("NO_PROXY", "").split(","), (
         f"{name}: approval missing from NO_PROXY -- registration would hit the egress wall"
     )
+    # serve() turns the in-chat approval card on when APPROVAL_PUBLIC_URL is set, so a
+    # tool the overlay misses silently degrades to channel-only approvals (workspace
+    # shipped that way and the gap surfaced only when its tools were first gated).
+    assert env_of(name, OVERLAY).get("APPROVAL_PUBLIC_URL") == "https://approval.${MCP_DOMAIN}", (
+        f"{name}: tunnel overlay must stamp APPROVAL_PUBLIC_URL -- without it gated"
+        " calls post no in-chat approval card"
+    )
 
 
 def test_env_example_available_list_matches_manifests():

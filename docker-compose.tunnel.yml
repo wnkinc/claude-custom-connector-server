@@ -36,16 +36,22 @@ services:
   # Approval defaults ON for the gated tools; a deploy that has no approval channel
   # configured opts out explicitly with MCP_REQUIRE_APPROVAL=0 in the root .env
   # (without a channel, gated calls just report the approval as undeliverable).
+  # APPROVAL_PUBLIC_URL also turns on the in-chat approval card (serve() defaults the
+  # widget on when it's set), so EVERY tool service stamps it -- test_stack enforces
+  # this. The card needs the HTTP session id at load, so tools whose code defaults
+  # stateless (telegram, browser) flip MCP_STATELESS_HTTP off here.
   telegram:
     environment:
       MCP_AUTH_ENABLED: "1"
       MCP_REQUIRE_APPROVAL: ${MCP_REQUIRE_APPROVAL:-1}
       MCP_UNTRUSTED_OUTPUT: "1"
       MCP_PUBLIC_URL: https://telegram.${MCP_DOMAIN}
+      APPROVAL_PUBLIC_URL: https://approval.${MCP_DOMAIN}
+      MCP_STATELESS_HTTP: "0"
 
   # The gatekeeper flips other tools' approval requirement. set_gating is ALWAYS gated
   # (the in-chat widget is its own approval channel, so it needs no Slack/Discord/etc),
-  # and it shows the card via APPROVAL_WIDGET -> APPROVAL_PUBLIC_URL.
+  # and it shows the card via APPROVAL_PUBLIC_URL.
   # Workspace acts as YOUR Google account and returns untrusted external content;
   # the engine's OAuth redirect must match the public URL exactly.
   workspace:
@@ -54,6 +60,7 @@ services:
       MCP_REQUIRE_APPROVAL: ${MCP_REQUIRE_APPROVAL:-1}
       MCP_UNTRUSTED_OUTPUT: "1"
       MCP_PUBLIC_URL: https://workspace.${MCP_DOMAIN}
+      APPROVAL_PUBLIC_URL: https://approval.${MCP_DOMAIN}
       WORKSPACE_EXTERNAL_URL: https://workspace.${MCP_DOMAIN}
       GOOGLE_OAUTH_REDIRECT_URI: https://workspace.${MCP_DOMAIN}/oauth2callback
 
@@ -61,7 +68,6 @@ services:
     environment:
       MCP_AUTH_ENABLED: "1"
       MCP_REQUIRE_APPROVAL: "1"
-      APPROVAL_WIDGET: "1"
       APPROVAL_PUBLIC_URL: https://approval.${MCP_DOMAIN}
       MCP_PUBLIC_URL: https://gatekeeper.${MCP_DOMAIN}
 
@@ -75,6 +81,8 @@ services:
       MCP_REQUIRE_APPROVAL: ${MCP_REQUIRE_APPROVAL:-1}
       MCP_UNTRUSTED_OUTPUT: "1"
       MCP_PUBLIC_URL: https://browser.${MCP_DOMAIN}
+      APPROVAL_PUBLIC_URL: https://approval.${MCP_DOMAIN}
+      MCP_STATELESS_HTTP: "0"
       BROWSER_VIEW_URL: https://browser-view.${MCP_DOMAIN}/vnc.html?autoconnect=true&resize=scale
 
 # INGRESS routing, committed here so nothing public runs that isn't in the repo. Compose
