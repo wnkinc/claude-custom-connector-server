@@ -1,4 +1,10 @@
-# Agent tools, from your server
+<p align="center">
+  <img src=".github/logo.svg" width="88" alt="">
+</p>
+
+<h1 align="center">Agent tools, from your server</h1>
+
+<p align="center"><a href="https://agentics.download"><strong>agentics.download</strong></a></p>
 
 Claude arrives with a set of connectors, and the set is chosen for everyone.
 The tool that sends your mail, messages from your number, or works a browser
@@ -10,14 +16,12 @@ reachable from the Claude apps (desktop, web, mobile) through a Cloudflare
 Tunnel and gated by Google OAuth. Use the tools included here, add your own —
 each gated as tightly or loosely as you decide.
 
-Website: **[agentics.download](https://agentics.download)**
-
 ## The tools
 
 Each tool is its own container and its own connector
-(`https://<tool>.<your-domain>/mcp`), opt-in via `COMPOSE_PROFILES`. Built on
-open source wherever one fits — the wrapper adds the shared security stack
-(OAuth, egress wall, guardrail, approvals), not a new engine:
+(`https://<tool>.<your-domain>/mcp`), opt-in via `COMPOSE_PROFILES`. Each one
+wraps a proven open-source engine in the shared security stack — OAuth, egress
+wall, guardrail, approvals:
 
 | Tool | What it is | Built on |
 |---|---|---|
@@ -28,9 +32,7 @@ open source wherever one fits — the wrapper adds the shared security stack
 
 Experiments — X, market data, backtesting — live in a separate overlay repo,
 [wnkinc/beta-tools](https://github.com/wnkinc/beta-tools), and run on the same
-stack. New tools are stamped from a template that arrives already wired into
-the substrate: `scripts/new-tool.sh`, with a built-in Claude Code skill
-([`new-tool`](.claude/skills/new-tool/SKILL.md)) as the guide.
+stack.
 
 ## How it works
 
@@ -69,9 +71,6 @@ flowchart LR
   straight to the approval sidecar, never through the model, so a hijacked
   tool can't approve itself.
 
-Full picture: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**. Permissions
-and approvals: **[docs/GATEKEEPER.md](docs/GATEKEEPER.md)**.
-
 ## Quick start
 
 ```bash
@@ -81,27 +80,27 @@ claude
 ```
 
 Then say: **"deploy this"** — local box or AWS VM, Claude Code walks the whole
-setup. Deploying by hand instead: **[docs/DEPLOY.md](docs/DEPLOY.md)** is the
-chooser.
+setup.
 
 Just hacking on a tool? `docker compose up --build` runs the stack locally
 with auth and tunnel off.
 
 ## What you'll need
 
-The list is the same either way you host. Total out-of-pocket: nothing
-locally, ~$15/mo if you let Pulumi run the EC2 VM.
+A Linux box with Docker — or an AWS account and ~$15/mo for the VM Pulumi
+provisions — plus a domain on Cloudflare and a Google OAuth client. The full
+list, with what each piece is for, is gathered at the top of
+**[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
-| | What for |
-|---|---|
-| **A Linux box with Docker** (compose v2.20+) — or an AWS account instead | runs the stack; the AWS path provisions a t3.small for you |
-| **A domain on Cloudflare** (free plan is fine) + an API token (`Cloudflare Tunnel:Edit` + `DNS:Edit`) | public HTTPS ingress — one subdomain per tool, no inbound ports opened |
-| **[Pulumi CLI](https://www.pulumi.com/docs/install/)** | creates the tunnel + wildcard DNS (and the VM on AWS); `pulumi login --local` keeps state on your machine |
-| **A Google Cloud OAuth client** (free) | the "Sign in with Google" gate on every tool, locked to your email allowlist |
-| **A Hugging Face token** + access to `meta-llama/Llama-Prompt-Guard-2-86M` (free, granted in minutes) | the local guardrail model. Local path only — AWS uses Bedrock Guardrails |
-| **An approval channel** — a Slack, Discord, or Telegram bot | where Approve/Deny cards land for gated tool calls. Pick a platform the agent itself does *not* operate |
-| **Per-tool secrets** — e.g. Telegram API credentials | only for the tools you turn on; each documents its own `tools/<tool>/env.example` |
+The one deploy-time decision is which tools to run (`COMPOSE_PROFILES` in
+`.env`); permissions, approvals, and adding tools later are all runtime
+changes.
 
-The one deploy-time decision is **which tools to run** (`COMPOSE_PROFILES` in
-`.env`). The security substrate comes up on its own, and permissions,
-approvals, and adding tools later are all runtime changes.
+## Docs
+
+- **New tool** — `scripts/new-tool.sh` stamps one already wired into the
+  substrate; the [`new-tool`](.claude/skills/new-tool/SKILL.md) skill is the
+  guide.
+- **Deploying** — **[docs/DEPLOY.md](docs/DEPLOY.md)**
+- **How it fits together** — **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
+- **Permissions & approvals** — **[docs/GATEKEEPER.md](docs/GATEKEEPER.md)**

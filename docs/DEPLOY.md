@@ -45,14 +45,23 @@ while keeping its domain, tunnel, and credentials.
 
 ## What every deployment needs (gathered up front)
 
+- A **Linux box with Docker** (compose v2.20+) — or an **AWS account**
+  instead; the AWS runbook provisions a t3.small for you.
 - A **domain on Cloudflare** (free plan is fine), plus an **API token**
-  (`Cloudflare Tunnel:Edit` + `DNS:Edit`). Each tool gets a subdomain.
+  (`Cloudflare Tunnel:Edit` + `DNS:Edit`). Each tool gets a subdomain, and
+  ingress is HTTPS through the tunnel with no inbound ports opened.
 - The **[Pulumi CLI](https://www.pulumi.com/docs/install/)** — it provisions
   the ingress stack on both paths (and the VM on AWS). `pulumi login --local`
   keeps state as a file on your machine; any shared backend works too.
 - A **Google Cloud OAuth client** (free) — “Sign in with Google” gating every
   tool to your email allowlist. Created by hand in both paths; each runbook
   walks through it.
+- A **Hugging Face token** with access to
+  `meta-llama/Llama-Prompt-Guard-2-86M` (free, granted in minutes) — the local
+  guardrail model. Local path only; the AWS path uses Bedrock Guardrails.
+- An **approval channel** — a Slack, Discord, or Telegram bot where
+  Approve/Deny cards land for gated tool calls. Pick a platform the agent
+  itself does **not** operate.
 - **Per-tool secrets** (API keys etc.) — each tool documents its own
   `tools/<tool>/env.example`; deployment docs stay tool-agnostic.
 
