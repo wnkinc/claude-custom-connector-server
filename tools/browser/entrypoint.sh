@@ -14,6 +14,9 @@ HEIGHT="${BROWSER_HEIGHT:-800}"
 
 # Headless deploys skip the display stack entirely.
 if [ "${BROWSER_HEADLESS:-0}" != "1" ]; then
+  # An unclean host shutdown leaves the previous Xvfb's lock behind in the
+  # writable layer; Xvfb then refuses to start and dies silently (2026-08-07).
+  rm -f "/tmp/.X${DISPLAY#:}-lock" "/tmp/.X11-unix/X${DISPLAY#:}"
   Xvfb "$DISPLAY" -screen 0 "${WIDTH}x${HEIGHT}x24" -ac +extension RANDR >/dev/null 2>&1 &
   # A window manager so Chromium gets normal focus/raise behavior under VNC.
   fluxbox >/dev/null 2>&1 &
