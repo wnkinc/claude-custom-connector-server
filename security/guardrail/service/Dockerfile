@@ -15,7 +15,7 @@
 #   docker build -t mcp-guardrail security/guardrail/service                  # local model
 #   docker build --build-arg GUARDRAIL_PROVIDER=bedrock -t mcp-guardrail ...  # API-only
 # ---------------------------------------------------------------------------------
-ARG BASE=public.ecr.aws/amazonlinux/amazonlinux@sha256:590b8c9fdab65c7f5b8a2392739104ed6bc5055433ba8ff2bf0d2fa500db2ea3
+ARG BASE=public.ecr.aws/amazonlinux/amazonlinux@sha256:6d8e068b91f351df5bf6acd4bd261316e42747ad4bae76689ff6f4939e2180a2
 
 # --- builder: uv resolves the venv from the existing uv.lock (--frozen) ---------------
 FROM ${BASE} AS builder
