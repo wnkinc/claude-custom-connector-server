@@ -6,15 +6,11 @@
 
 <p align="center"><a href="https://agentics.download"><strong>agentics.download</strong></a></p>
 
-Claude arrives with a set of connectors, and the set is chosen for everyone.
-The tool that sends your mail, messages from your number, or works a browser
-overnight — that one is yours to add.
+Adding a tool means running a server.
+Claude connects to any MCP server, and that server is yours to run: hosting, auth in front of it, limits on what it can reach.
 
-This repo is a secure framework for adding it: self-hosted
-[MCP](https://modelcontextprotocol.io) servers, one container per tool,
-reachable from the Claude apps (desktop, web, mobile) through a Cloudflare
-Tunnel and gated by Google OAuth. Use the tools included here, add your own —
-each gated as tightly or loosely as you decide.
+This is A secure framework for adding your own.
+Run tools from your server, inside a framework built for exactly that. Use what's included here, or add more. Each gated as tightly or loosely as you decide.
 
 ## The tools
 
