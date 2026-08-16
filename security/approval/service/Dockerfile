@@ -9,7 +9,7 @@
 # BUILD CONTEXT = this dir (self-contained; no shared ./security import):
 #   docker build -t mcp-approval security/approval/service
 # ---------------------------------------------------------------------------------
-ARG BASE=public.ecr.aws/amazonlinux/amazonlinux@sha256:590b8c9fdab65c7f5b8a2392739104ed6bc5055433ba8ff2bf0d2fa500db2ea3
+ARG BASE=public.ecr.aws/amazonlinux/amazonlinux@sha256:6d8e068b91f351df5bf6acd4bd261316e42747ad4bae76689ff6f4939e2180a2
 
 # --- builder: resolve the venv from the hashed lock (tamper-evident install) ----------
 FROM ${BASE} AS builder

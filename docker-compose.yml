@@ -282,7 +282,7 @@ services:
   # created, so a compromised sync job can't read the rest of Drive. Until the
   # token exists the loop just idles.
   browser-sync:
-    image: rclone/rclone:1.72.0@sha256:0eb18825ac9732c21c11d654007170572bbd495352bb6dbb624f18e4f462c496
+    image: rclone/rclone:1.75.0@sha256:b06aed988cf5967de7c25be5925240983981c757f4ed1ac9d2fa659d51d60548
     profiles: ["browser"]   # runs exactly when the browser does
     restart: unless-stopped
     environment:
