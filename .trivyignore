@@ -7,6 +7,12 @@
 # npm and its bundled deps never ship.
 CVE-2026-33671
 CVE-2026-48815
+CVE-2026-13149
+CVE-2026-14257
+CVE-2026-69152
+CVE-2026-69192
+CVE-2026-59873
+CVE-2026-59874
 
 # Go-stdlib CVEs in cloudflared 2026.8.2 (built with Go 1.26.4; fixes land in
 # 1.26.6). Every cloudflared release carries them until Cloudflare cuts a build
