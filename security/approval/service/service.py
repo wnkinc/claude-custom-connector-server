@@ -707,7 +707,17 @@ def _save_state() -> None:
     tmp = f"{path}.tmp"
     with open(tmp, "w") as f:
         json.dump(_STATE, f)
+        # Flush to disk BEFORE the rename: without it a power loss can persist the
+        # rename ahead of the data and leave a zero-filled file (seen live -- the
+        # sidecar then crash-looped and every gated tool failed closed).
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, path)  # atomic: a crash mid-write never corrupts the state
+    dir_fd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)  # make the rename itself durable
+    finally:
+        os.close(dir_fd)
 
 
 def _source_state(source: str) -> dict:
