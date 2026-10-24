@@ -2,7 +2,7 @@
 # must not drift). The rest mirrors the vendored engine's [project.dependencies]
 # (the Dockerfile's vendor stage pins the checkout itself by commit + sha256):
 # the child process runs from source against THIS locked venv.
-fastmcp==3.4.2
+fastmcp==3.4.10
 dotenv>=0.9.9
 httpx>=0.28.1
 mcp[cli]>=1.8.0
